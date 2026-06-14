@@ -930,14 +930,53 @@
   function setupImportBar() {
     var header = document.querySelector(".topbar");
     var bar = el('<div class="importbar"></div>');
-    var btn = el('<button class="btn ghost" id="import-btn">📁 Import save</button>');
+    var btn = el('<button class="btn ghost" id="import-btn" title="Import a Solar Expanse save (.gz or .json) — or drag the file anywhere onto the page">📁 Import save</button>');
     var inp = el('<input type="file" accept=".gz,.json" style="display:none">');
     var status = el('<span class="import-status"></span>');
     bar.appendChild(btn); bar.appendChild(status); bar.appendChild(inp);
     header.appendChild(bar);
     btn.addEventListener("click", function () { inp.click(); });
-    inp.addEventListener("change", function () { if (inp.files[0]) doImport(inp.files[0], status); });
+    inp.addEventListener("change", function () { if (inp.files[0]) { doImport(inp.files[0], status); inp.value = ""; } });
+    setupDragDrop(status);
     refreshStatus();
+  }
+  // Drop a save file anywhere on the page to import it (same pipeline as the button).
+  function setupDragDrop(status) {
+    var overlay = el(
+      '<div class="dropzone" aria-hidden="true">' +
+        '<div class="dropzone-card">' +
+          '<div class="dropzone-icon">📁</div>' +
+          '<div class="dropzone-title">Drop your save to import</div>' +
+          '<div class="dropzone-sub">a Solar Expanse <b>.gz</b> (or .json) save file</div>' +
+        '</div>' +
+      '</div>');
+    document.body.appendChild(overlay);
+    var depth = 0;
+    function hasFiles(e) {
+      var t = e.dataTransfer && e.dataTransfer.types;
+      return !!t && Array.prototype.indexOf.call(t, "Files") !== -1;
+    }
+    function hide() { depth = 0; overlay.classList.remove("show"); }
+    window.addEventListener("dragenter", function (e) {
+      if (!hasFiles(e)) return;
+      e.preventDefault(); depth++; overlay.classList.add("show");
+    });
+    window.addEventListener("dragover", function (e) {
+      if (!hasFiles(e)) return;
+      e.preventDefault();
+      try { e.dataTransfer.dropEffect = "copy"; } catch (_) {}
+    });
+    window.addEventListener("dragleave", function (e) {
+      if (!hasFiles(e)) return;
+      depth = Math.max(0, depth - 1);
+      if (depth === 0) hide();
+    });
+    window.addEventListener("drop", function (e) {
+      if (!hasFiles(e)) return;
+      e.preventDefault(); hide();
+      var f = e.dataTransfer.files && e.dataTransfer.files[0];
+      if (f) doImport(f, status);
+    });
   }
 
   // =========================================================================
@@ -947,7 +986,7 @@
     pageHeader(mount, "Expansion Planner",
       "Plan a build-out at a destination. With a save imported, it shows what you already have, what's short, and how many trips your fleet needs.");
 
-    if (!SAVE) mount.appendChild(el('<div class="callout">Click <b>📁 Import save</b> (top-right) to load your research, stockpile and fleet — then this shows exactly what you still need and how to ship it. You can also plan without a save (it just shows totals).</div>'));
+    if (!SAVE) mount.appendChild(el('<div class="callout">Click <b>📁 Import save</b> (top-right) — or just <b>drag your save file onto this page</b> — to load your research, stockpile and fleet, then this shows exactly what you still need and how to ship it. You can also plan without a save (it just shows totals).</div>'));
 
     var items = placeables(); var byId = {}; items.forEach(function (i) { byId[i.id] = i; });
 

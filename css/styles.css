@@ -181,3 +181,21 @@ table.data td.num { text-align: right; font-variant-numeric: tabular-nums; }
 .importbar { display: flex; align-items: center; gap: 12px; padding: 8px 0 2px; flex-wrap: wrap; }
 .importbar .btn { padding: 6px 12px; font-size: 13px; }
 .import-status { font-size: 13px; }
+
+/* ---- Drag-and-drop save overlay ---- */
+.dropzone {
+  position: fixed; inset: 0; z-index: 100;
+  display: none; align-items: center; justify-content: center;
+  background: rgba(10,14,26,.82); backdrop-filter: blur(4px);
+  pointer-events: none;
+}
+.dropzone.show { display: flex; }
+.dropzone-card {
+  text-align: center; padding: 38px 54px; border-radius: 18px;
+  background: var(--bg-panel); border: 3px dashed var(--accent);
+  box-shadow: var(--shadow); animation: dz-pop .15s ease-out;
+}
+.dropzone-icon { font-size: 54px; line-height: 1; margin-bottom: 10px; filter: drop-shadow(0 0 12px rgba(93,214,255,.55)); }
+.dropzone-title { font-size: 22px; font-weight: 800; color: var(--text); }
+.dropzone-sub { font-size: 14px; color: var(--text-dim); margin-top: 6px; }
+@keyframes dz-pop { from { transform: scale(.96); opacity: .3; } to { transform: scale(1); opacity: 1; } }
