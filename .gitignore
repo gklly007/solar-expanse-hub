@@ -1,0 +1,4 @@
+# never commit game saves or test artifacts
+*.gz
+*_testsave*
+*.save

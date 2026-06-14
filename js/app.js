@@ -10,6 +10,8 @@
   // ---- persistent state ----------------------------------------------------
   var owned = loadSet("se-owned");          // research ids the player has completed
   var build = loadJSON("se-build", { placed: {}, ship: null });
+  var exp = loadJSON("se-exp", { placed: {}, dest: null });
+  var SAVE = loadJSON("se-save", null);     // imported save summary (stockpile/fleet/money)
   var plannerTarget = null;                 // pending planner selection
 
   function loadSet(key) {
@@ -177,9 +179,9 @@
   // Router
   // =========================================================================
   var ROUTES = {
-    home: viewHome, planner: viewPlanner, build: viewBuild, research: viewResearch,
-    facilities: viewFacilities, spacecraft: viewSpacecraft, modules: viewModules,
-    bodies: viewBodies, terraform: viewTerraform, resources: viewResources
+    home: viewHome, planner: viewPlanner, build: viewBuild, expansion: viewExpansion,
+    research: viewResearch, facilities: viewFacilities, spacecraft: viewSpacecraft,
+    modules: viewModules, bodies: viewBodies, terraform: viewTerraform, resources: viewResources
   };
   function currentTab() {
     var h = (location.hash || "#/home").replace(/^#\//, "");
@@ -863,6 +865,193 @@
     mount.appendChild(p);
   }
 
+  // =========================================================================
+  // SAVE IMPORT
+  // =========================================================================
+  function isGzip(buf) { var b = new Uint8Array(buf); return b[0] === 0x1f && b[1] === 0x8b; }
+  function readSaveFile(file) {
+    return file.arrayBuffer().then(function (buf) {
+      if (/\.gz$/i.test(file.name) || isGzip(buf)) {
+        var stream = new Blob([buf]).stream().pipeThrough(new DecompressionStream("gzip"));
+        return new Response(stream).text();
+      }
+      return new TextDecoder().decode(buf);
+    });
+  }
+  function extractPlayer(save) {
+    if (!save || !save.companyDataSave) throw new Error("Not a Solar Expanse save");
+    var ai = {};
+    (save.companyAISave || []).forEach(function (a) { if (a.IDCompany) ai[a.IDCompany.id] = true; });
+    var comps = save.companyDataSave;
+    var player = comps.find(function (c) { return c.companyID && !ai[c.companyID.id]; })
+      || comps.find(function (c) { return typeof c.money === "number" && c.companyID && c.companyID.id !== "WorldGovernment"; })
+      || comps[0];
+    var research = (((player.researchDataToSave || {}).completeResearch) || [])
+      .map(function (e) { return e && e.id; }).filter(Boolean)
+      .map(function (id) { return "research-" + id.replace(/_/g, "-"); });
+    var stock = {};
+    (save.objectInfoDatas || []).forEach(function (od) {
+      if (!od.companyId || od.companyId.id !== player.companyID.id) return;
+      (od.listRowResourcesData || []).forEach(function (row) {
+        var rid = ((row.resourceTypeIDSave || {}).id || "").replace("id_resource_", "");
+        if (rid && row.value) stock[rid] = (stock[rid] || 0) + row.value;
+      });
+    });
+    var fleet = {};
+    (player.spacecrafts || []).forEach(function (s) {
+      var t = (s.spacecraftType || "").replace("SpacecraftType/", "");
+      if (t) fleet[t] = (fleet[t] || 0) + 1;
+    });
+    return { company: player.companyID.id, money: player.money, research: research,
+      stockpile: stock, fleet: fleet, population: Math.round(stock.human || 0) };
+  }
+  function doImport(file, status) {
+    status.textContent = "reading…";
+    readSaveFile(file).then(function (text) {
+      var p = extractPlayer(parseSolarExpanseSave(text));
+      owned = new Set(p.research); saveSet("se-owned", owned);
+      SAVE = { company: p.company, money: p.money, stockpile: p.stockpile, fleet: p.fleet,
+        population: p.population, researchCount: p.research.length, at: Date.now() };
+      saveJSON("se-save", SAVE);
+      refreshStatus(); render();
+    }).catch(function (e) { status.innerHTML = '<span style="color:var(--bad)">⚠ ' + esc(e.message) + "</span>"; });
+  }
+  function clearSave() { SAVE = null; try { localStorage.removeItem("se-save"); } catch (e) {} refreshStatus(); render(); }
+  function refreshStatus() {
+    var s = document.querySelector(".import-status");
+    if (!s) return;
+    if (SAVE) {
+      s.innerHTML = '<span style="color:var(--good)">✓ ' + esc(SAVE.company) + "</span> · " +
+        SAVE.researchCount + " techs · " + fmtInt(SAVE.population) + " pop " +
+        '<button class="chip" id="clear-save">clear</button>';
+      var c = document.getElementById("clear-save"); if (c) c.addEventListener("click", clearSave);
+    } else { s.innerHTML = '<span class="muted">no save imported</span>'; }
+  }
+  function setupImportBar() {
+    var header = document.querySelector(".topbar");
+    var bar = el('<div class="importbar"></div>');
+    var btn = el('<button class="btn ghost" id="import-btn">📁 Import save</button>');
+    var inp = el('<input type="file" accept=".gz,.json" style="display:none">');
+    var status = el('<span class="import-status"></span>');
+    bar.appendChild(btn); bar.appendChild(status); bar.appendChild(inp);
+    header.appendChild(bar);
+    btn.addEventListener("click", function () { inp.click(); });
+    inp.addEventListener("change", function () { if (inp.files[0]) doImport(inp.files[0], status); });
+    refreshStatus();
+  }
+
+  // =========================================================================
+  // EXPANSION PLANNER (save-aware): destination + need/have/short + fleet trips
+  // =========================================================================
+  function viewExpansion(mount) {
+    pageHeader(mount, "Expansion Planner",
+      "Plan a build-out at a destination. With a save imported, it shows what you already have, what's short, and how many trips your fleet needs.");
+
+    if (!SAVE) mount.appendChild(el('<div class="callout">Click <b>📁 Import save</b> (top-right) to load your research, stockpile and fleet — then this shows exactly what you still need and how to ship it. You can also plan without a save (it just shows totals).</div>'));
+
+    var items = placeables(); var byId = {}; items.forEach(function (i) { byId[i.id] = i; });
+
+    var panel = el('<div class="panel"></div>');
+    panel.appendChild(el("<h3>Destination &amp; build list</h3>"));
+    var ctr = el('<div class="controls"></div>');
+    var bodies = DATA.planets.map(function (p) { return p.name; })
+      .concat(DATA.moons.map(function (m) { return m.name + " (" + m.parent + ")"; }));
+    var destSel = el('<select style="min-width:200px"><option value="">— destination —</option>' +
+      bodies.map(function (b) { return '<option' + (exp.dest === b ? " selected" : "") + ">" + esc(b) + "</option>"; }).join("") + "</select>");
+    var addSel = el('<select style="min-width:220px"></select>');
+    items.slice().sort(function (a, b) { return a.cat.localeCompare(b.cat) || a.name.localeCompare(b.name); })
+      .forEach(function (it) { addSel.appendChild(el('<option value="' + esc(it.id) + '">' + esc(it.name) + " — " + esc(it.cat) + "</option>")); });
+    var addBtn = el('<button class="btn">+ Add</button>');
+    ctr.appendChild(el('<label class="check">To:</label>')); ctr.appendChild(destSel);
+    ctr.appendChild(addSel); ctr.appendChild(addBtn);
+    panel.appendChild(ctr);
+    var placedBox = el("<div></div>"); panel.appendChild(placedBox);
+    mount.appendChild(panel);
+    var resBox = el('<div class="panel"></div>'); mount.appendChild(resBox);
+
+    function add(id, d) { exp.placed[id] = Math.max(0, (exp.placed[id] || 0) + d); if (!exp.placed[id]) delete exp.placed[id]; saveJSON("se-exp", exp); drawPlaced(); drawResults(); }
+
+    function drawPlaced() {
+      var ids = Object.keys(exp.placed);
+      if (!ids.length) { placedBox.innerHTML = '<p class="empty">Add facilities/modules to build at the destination.</p>'; return; }
+      placedBox.innerHTML = "";
+      ids.sort(function (a, b) { return byId[a].name.localeCompare(byId[b].name); }).forEach(function (id) {
+        var row = el('<div class="placed-row"><span class="pname">' + esc(byId[id].name) + "</span></div>");
+        var counter = el('<span class="counter"></span>');
+        var dec = el("<button>−</button>"), inc = el("<button>+</button>"), inp = el('<input type="number" min="0" value="' + exp.placed[id] + '">');
+        dec.addEventListener("click", function () { add(id, -1); });
+        inc.addEventListener("click", function () { add(id, 1); });
+        inp.addEventListener("change", function () { exp.placed[id] = Math.max(0, parseInt(inp.value, 10) || 0); if (!exp.placed[id]) delete exp.placed[id]; saveJSON("se-exp", exp); drawPlaced(); drawResults(); });
+        counter.appendChild(dec); counter.appendChild(inp); counter.appendChild(inc);
+        row.appendChild(counter);
+        var rm = el('<button class="chip">✕</button>'); rm.addEventListener("click", function () { delete exp.placed[id]; saveJSON("se-exp", exp); drawPlaced(); drawResults(); });
+        row.appendChild(rm); placedBox.appendChild(row);
+      });
+    }
+
+    function drawResults() {
+      var ids = Object.keys(exp.placed);
+      if (!ids.length) { resBox.innerHTML = "<h3>Requirements</h3><p class='empty'>Nothing planned yet.</p>"; return; }
+      var reds = activeReductions();
+      var need = {}, tons = 0, workers = 0, power = 0, days = 0, missing = [];
+      ids.forEach(function (id) {
+        var it = byId[id], c = exp.placed[id];
+        if (it.kind === "fac") {
+          var f = it.ref, m = buildCostMult(f, reds);
+          (f.build_cost || []).forEach(function (b) { var a = Math.round(b.amount * m) * c; need[b.resource] = (need[b.resource] || 0) + a; tons += a; });
+          workers += (f.workers_required || 0) * crewMult(f, reds) * c;
+          power += ((f.energy_consumption || 0) - (f.power_production || 0) * powerMult(f, reds)) * c;
+          days += (f.build_time_days || 0) * c;
+          if (f.unlocked_by && f.unlocked_by.length && !f.unlocked_by.some(function (u) { return owned.has(u.id); }))
+            missing.push({ fac: f.name, res: f.unlocked_by });
+        } else { tons += (it.ref.mass || 0) * c; }
+      });
+
+      var html = "<h3>Requirements" + (exp.dest ? ' <span class="muted" style="font-weight:400">→ ' + esc(exp.dest) + "</span>" : "") + "</h3>";
+      if (missing.length) {
+        html += '<div class="callout" style="border-color:var(--bad)">⚠ Missing research: ' +
+          missing.map(function (x) { return "<b>" + esc(x.fac) + "</b> needs " + x.res.map(function (u) { return '<a href="#/planner" class="goto-plan" data-id="' + esc(u.id) + '">' + esc(u.name) + "</a>"; }).join(" or "); }).join("; ") + "</div>";
+      }
+      html += '<table class="totals"><thead><tr><th>Resource</th><th class="num">Need</th>' +
+        (SAVE ? '<th class="num">Have</th><th class="num">Short</th>' : "") + "</tr></thead><tbody>";
+      Object.keys(need).sort(function (a, b) { return resName(a).localeCompare(resName(b)); }).forEach(function (rid) {
+        var have = SAVE ? Math.round(SAVE.stockpile[rid] || 0) : null;
+        var short = have != null ? Math.max(0, need[rid] - have) : null;
+        html += "<tr><td>" + resPip(rid, need[rid]) + " " + esc(resName(rid)) + "</td><td class='num'>" + fmtInt(need[rid]) + "</td>" +
+          (SAVE ? "<td class='num muted'>" + fmtInt(have) + "</td><td class='num'" + (short > 0 ? " style='color:var(--bad)'" : " style='color:var(--good)'") + ">" + (short > 0 ? fmtInt(short) : "✓") + "</td>" : "") + "</tr>";
+      });
+      html += "<tr class='grand'><td>Total tonnage</td><td class='num'>" + fmtInt(tons) + " t</td>" + (SAVE ? "<td colspan='2'></td>" : "") + "</tbody></table>";
+      resBox.innerHTML = html;
+
+      // logistics: trips with your fleet
+      var log = "<h4 style='margin:14px 0 6px'>Logistics</h4>";
+      if (SAVE && Object.keys(SAVE.fleet).length) {
+        var fleetCargo = 0, lines = [];
+        Object.keys(SAVE.fleet).forEach(function (sid) {
+          var info = IDX.shipBySaveId[sid]; var cargo = info ? info.cargo : 0; var cnt = SAVE.fleet[sid];
+          fleetCargo += cargo * cnt;
+          lines.push(cnt + "× " + (info ? info.name : sid) + " (" + fmtInt(cargo) + "t)");
+        });
+        var waves = fleetCargo > 0 ? Math.ceil(tons / fleetCargo) : "—";
+        log += "<p>Your fleet: " + esc(lines.join(", ")) + " = <b>" + fmtInt(fleetCargo) + " t</b> per wave → <b>" + waves + "</b> full wave(s) to move " + fmtInt(tons) + " t.</p>";
+      } else {
+        var big = DATA.spacecraft.filter(function (s) { return s.cargo_t; }).sort(function (a, b) { return b.cargo_t - a.cargo_t; })[0];
+        if (big) log += "<p class='muted'>No fleet imported. Reference: a " + esc(big.name) + " carries " + fmtInt(big.cargo_t) + " t → " + Math.ceil(tons / big.cargo_t) + " trips.</p>";
+      }
+      log += "<table class='totals'><tbody>";
+      if (workers > 0) log += "<tr><td>" + resPip("human", Math.round(workers)) + " Workers needed</td><td class='num'>" + fmtInt(workers) + (SAVE ? " / " + fmtInt(SAVE.population) + " pop" : "") + "</td></tr>";
+      if (Math.round(power) !== 0) log += "<tr><td>Net power</td><td class='num'>" + fmtInt(power) + "</td></tr>";
+      if (days > 0) log += "<tr><td>Build days (serial)</td><td class='num'>" + fmtInt(days) + "</td></tr>";
+      log += "</tbody></table>";
+      resBox.innerHTML += log;
+      resBox.querySelectorAll(".goto-plan").forEach(function (a) { a.addEventListener("click", function () { plannerTarget = { kind: "research", id: a.getAttribute("data-id") }; }); });
+    }
+
+    addBtn.addEventListener("click", function () { if (addSel.value) add(addSel.value, 1); });
+    destSel.addEventListener("change", function () { exp.dest = destSel.value; saveJSON("se-exp", exp); drawResults(); });
+    drawPlaced(); drawResults();
+  }
+
   // ---- utils ---------------------------------------------------------------
   function uniq(a) { return Array.from(new Set(a)); }
 
@@ -874,6 +1063,12 @@
     IDX.facilities = {}; DATA.facilities.forEach(function (f) { IDX.facilities[f.id] = f; });
     IDX.spacecraftById = {}; DATA.spacecraft.forEach(function (s) { IDX.spacecraftById[s.id] = s; });
     IDX.resName = {}; DATA.resources.forEach(function (r) { IDX.resName[r.id] = r.name; });
+    // map save ship type id (underscore) -> {name,cargo} for fleet logistics
+    IDX.shipBySaveId = {};
+    DATA.spacecraft.forEach(function (s) {
+      var saveId = (s.id || "").replace(/^spacecraft-/, "").replace(/-/g, "_");
+      IDX.shipBySaveId[saveId] = { name: s.name, cargo: s.cargo_t };
+    });
     // merge cargo from spacecraft_cargo into spacecraft list (ensure cargo_t present)
     var cargoById = {}; (DATA.spacecraft_cargo || []).forEach(function (s) { cargoById[s.id] = s.cargo_capacity; });
     DATA.spacecraft.forEach(function (s) { if (s.cargo_t == null && cargoById[s.id] != null) s.cargo_t = cargoById[s.id]; });
@@ -888,6 +1083,7 @@
         '<a href="' + d.meta.sources.wiki + '" target="_blank" rel="noopener">Solar Expanse Wiki</a> pipeline. ' +
         "Fan-made; not affiliated with SpaceOps.";
       window.addEventListener("hashchange", render);
+      setupImportBar();
       render();
     })
     .catch(function (err) {
