@@ -1,0 +1,282 @@
+{
+  "module_construction": {
+    "role": "Construction",
+    "cargo": true,
+    "build_cost": [
+      {
+        "resource": "steel",
+        "amount": 50.0
+      },
+      {
+        "resource": "chips",
+        "amount": 5.0
+      }
+    ],
+    "build_time_days": 30.0,
+    "description": "Allows construction of facilities.",
+    "wiki_name": "Construction Equipment"
+  },
+  "module_habitat": {
+    "role": "Crew capacity (20)",
+    "cargo": true,
+    "build_cost": [
+      {
+        "resource": "steel",
+        "amount": 120.0
+      },
+      {
+        "resource": "chips",
+        "amount": 40.0
+      },
+      {
+        "resource": "supply",
+        "amount": 40.0
+      }
+    ],
+    "build_time_days": 120.0,
+    "description": "Long-term shelter with integrated power source, can be packed as cargo and deployed immediately to house a crew of 20 without additional infrastructure.",
+    "wiki_name": "Mobile Habitat"
+  },
+  "module_hubel_telescope": {
+    "role": "Installation",
+    "cargo": true,
+    "build_cost": [
+      {
+        "resource": "steel",
+        "amount": 10.0
+      },
+      {
+        "resource": "glass",
+        "amount": 30.0
+      },
+      {
+        "resource": "chips",
+        "amount": 5.0
+      }
+    ],
+    "build_time_days": 30.0,
+    "description": "Searches distant objects for resources.",
+    "wiki_name": "Space Telescope"
+  },
+  "module_space_construction_cargo": {
+    "role": "Installation",
+    "cargo": true,
+    "build_cost": [
+      {
+        "resource": "steel",
+        "amount": 100.0
+      },
+      {
+        "resource": "chips",
+        "amount": 10.0
+      }
+    ],
+    "build_time_days": 100.0,
+    "description": "Allows construction of orbital facilities. Cannot be transported once placed in orbit.",
+    "wiki_name": "Orbital Construction"
+  },
+  "module_icemining": {
+    "role": "Mining (0.3)",
+    "mines": [
+      "water",
+      "volatile"
+    ],
+    "cargo": true,
+    "build_cost": [
+      {
+        "resource": "steel",
+        "amount": 50.0
+      },
+      {
+        "resource": "chips",
+        "amount": 5.0
+      }
+    ],
+    "build_time_days": 50.0,
+    "description": "Equipment for extracting and refining of volatile compounds such as water, nitrogen, and various carbon molecules.",
+    "wiki_name": "Volatile Refining Module"
+  },
+  "module_metalmining": {
+    "role": "Mining (0.3)",
+    "mines": [
+      "metal"
+    ],
+    "cargo": true,
+    "build_cost": [
+      {
+        "resource": "steel",
+        "amount": 50.0
+      },
+      {
+        "resource": "chips",
+        "amount": 5.0
+      }
+    ],
+    "build_time_days": 50.0,
+    "description": "Equipment for extraction of common construction metals such as iron, aluminum, and silicon.",
+    "wiki_name": "Metal Mining Module"
+  },
+  "module_raremining": {
+    "role": "Mining (0.2)",
+    "mines": [
+      "raremetal"
+    ],
+    "cargo": true,
+    "build_cost": [
+      {
+        "resource": "steel",
+        "amount": 50.0
+      },
+      {
+        "resource": "chips",
+        "amount": 5.0
+      }
+    ],
+    "build_time_days": 50.0,
+    "description": "Equipment for extracting rare metallic elements such as gold, tungsten, titanium, beryllium, and various radioactive isotopes.",
+    "wiki_name": "Rare Metal Extraction Module"
+  },
+  "module_basemining": {
+    "role": "Mining (0.2)",
+    "mines": [
+      "water",
+      "volatile",
+      "metal",
+      "raremetal",
+      "silicon"
+    ],
+    "cargo": true,
+    "build_cost": [
+      {
+        "resource": "steel",
+        "amount": 75.0
+      },
+      {
+        "resource": "chips",
+        "amount": 10.0
+      }
+    ],
+    "build_time_days": 30.0,
+    "description": "A mobile set of equipment for extracting resources locally, when no infrastructure exists yet.",
+    "wiki_name": "Mining Module"
+  },
+  "module_power": {
+    "role": "Energy production + Energy storage (2)",
+    "cargo": true,
+    "build_cost": [
+      {
+        "resource": "alloy",
+        "amount": 70.0
+      },
+      {
+        "resource": "chips",
+        "amount": 35.0
+      },
+      {
+        "resource": "uran",
+        "amount": 10.0
+      }
+    ],
+    "build_time_days": 120.0,
+    "description": "Produces constant power from radioactive decay, without requiring input or maintenance",
+    "wiki_name": "Radioisotope Generator"
+  },
+  "module_ground_probe": {
+    "role": "Probe (10)",
+    "cargo": true,
+    "build_cost": [
+      {
+        "resource": "steel",
+        "amount": 50.0
+      }
+    ],
+    "build_time_days": 100.0,
+    "description": "Searches for resources on an object where it is located.",
+    "wiki_name": "Ground Probe"
+  },
+  "module_space_probe": {
+    "role": "Probe (10)",
+    "cargo": true,
+    "build_cost": [
+      {
+        "resource": "steel",
+        "amount": 5.0
+      },
+      {
+        "resource": "chips",
+        "amount": 1.0
+      }
+    ],
+    "build_time_days": 35.0,
+    "description": "Searches for resources on an object where it is located.",
+    "wiki_name": "Probe"
+  },
+  "module_fuel": {
+    "role": "Refining",
+    "cargo": true,
+    "build_cost": [
+      {
+        "resource": "steel",
+        "amount": 120.0
+      },
+      {
+        "resource": "chips",
+        "amount": 20.0
+      }
+    ],
+    "build_time_days": 60.0,
+    "description": "Processes Water into Fuel.",
+    "wiki_name": "Mobile Refinery"
+  },
+  "module_crew_compartment": {
+    "role": "Crew transport (5)",
+    "cargo": true,
+    "build_cost": [
+      {
+        "resource": "steel",
+        "amount": 5.0
+      },
+      {
+        "resource": "metal",
+        "amount": 20.0
+      }
+    ],
+    "build_time_days": 10.0,
+    "description": "Module allowing for transportation of 5 humans",
+    "wiki_name": "Crew Compartment Type-S"
+  },
+  "module_crew_medium": {
+    "role": "Crew transport (20)",
+    "cargo": true,
+    "build_cost": [
+      {
+        "resource": "steel",
+        "amount": 10.0
+      },
+      {
+        "resource": "plastic",
+        "amount": 20.0
+      }
+    ],
+    "build_time_days": 30.0,
+    "description": "Module allowing for transportation of 20 humans",
+    "wiki_name": "Crew Compartment Type-M"
+  },
+  "module_crew_large": {
+    "role": "Crew transport (100)",
+    "cargo": true,
+    "build_cost": [
+      {
+        "resource": "steel",
+        "amount": 20.0
+      },
+      {
+        "resource": "plastic",
+        "amount": 100.0
+      }
+    ],
+    "build_time_days": 90.0,
+    "description": "Module allowing for transportation of 100 humans",
+    "wiki_name": "Crew Compartment Type-L"
+  }
+}

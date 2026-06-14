@@ -4,10 +4,12 @@ build_extras.py  —  Additively enrich gamedata.json from the stockmaj wiki.
 
 The original full dataset (research, spacecraft, celestial bodies, the build
 calculator data) is produced by build_data.py from the game's asset-bundle dump.
-This script ADDS reference data that build wasn't carrying yet, pulled from the
-stockmaj/solar-expanse-wiki markdown, WITHOUT touching the verified categories:
+This script ADDS reference data that build wasn't carrying yet (pulled from the
+stockmaj/solar-expanse-wiki markdown) and enriches modules in place:
 
   * resources       10 -> 21  (+ type, Earth license, market price, producers/consumers, description)
+  * space_modules + crew_transports : enriched with role / mines / cargo / build cost / time /
+                    description from tools/module_enrichment.json (verified wiki<->calc id map)
   * launch_vehicles (new, 12)
   * launch_methods  (new, 6 - Space Elevator, Mass Driver, ...)
   * contracts       (new)
@@ -15,10 +17,8 @@ stockmaj/solar-expanse-wiki markdown, WITHOUT touching the verified categories:
   * corporations    (new, scenario -> playable corps)
   * asteroid_taxonomy (new, per-class resource yields)
 
-NOTE: space_modules is intentionally left untouched. The wiki "Space Modules"
-page (18 mining/refining modules) uses a different naming scheme than the build
-calculator's 12 payload modules; reconciling them needs game-taxonomy work and
-isn't guessed here.
+The other verified categories (research, spacecraft, facilities, celestial bodies,
+reductions, spacecraft_cargo, terraforming) are asserted byte-unchanged.
 
 Run:  python tools/build_extras.py --write      (omit --write for a dry run)
 Source: https://github.com/stockmaj/solar-expanse-wiki (docs/). Re-run after a
@@ -35,8 +35,8 @@ BASE = "https://raw.githubusercontent.com/stockmaj/solar-expanse-wiki/main/docs/
 CACHE = os.path.join(tempfile.gettempdir(), "se_wiki_cache")
 
 PROTECTED = ["meta", "research", "spacecraft", "planets", "moons", "asteroids",
-             "comets", "exoplanets", "facilities", "reductions", "crew_transports",
-             "spacecraft_cargo", "space_modules", "terraforming"]
+             "comets", "exoplanets", "facilities", "reductions",
+             "spacecraft_cargo", "terraforming"]
 
 def get(relpath):
     os.makedirs(CACHE, exist_ok=True)
@@ -230,6 +230,15 @@ def main(write):
     old_ids, new_ids = {x["id"] for x in G["resources"]}, {x["id"] for x in resources}
     assert old_ids <= new_ids, f"resource ids lost: {old_ids - new_ids}"
 
+    # enrich space modules + crew transports in place from the verified wiki mapping (ids preserved)
+    ME = json.load(open(os.path.join(REPO, "tools", "module_enrichment.json"), encoding="utf-8"))
+    mods_applied = 0
+    for arr in ("space_modules", "crew_transports"):
+        for m in G[arr]:
+            if m["id"] in ME:
+                m.update(ME[m["id"]]); mods_applied += 1
+    assert mods_applied == len(ME), "module enrichment: applied %d of %d" % (mods_applied, len(ME))
+
     G["resources"] = resources
     G["launch_vehicles"] = parse_launch_vehicles()
     G["launch_methods"] = parse_launch_methods()
@@ -250,7 +259,7 @@ def main(write):
     print(f"achievements     : {len(G['achievements'])}")
     print(f"corporations     : {len(G['corporations'])} scenarios")
     print(f"asteroid_taxonomy: {len(G['asteroid_taxonomy'])} -> {[c['name'] for c in G['asteroid_taxonomy']]}")
-    print("space_modules    : untouched (", len(G["space_modules"]), "- left for taxonomy reconciliation)")
+    print(f"modules enriched : {mods_applied} (space_modules {len(G['space_modules'])} + crew_transports {len(G['crew_transports'])})")
     print("\nSAMPLES")
     print(" resource:", json.dumps(resources[7], ensure_ascii=False))
     print(" LV      :", json.dumps(G["launch_vehicles"][0], ensure_ascii=False))

@@ -180,9 +180,11 @@
   // =========================================================================
   var ROUTES = {
     home: viewHome, planner: viewPlanner, build: viewBuild, expansion: viewExpansion,
+    trip: viewTrip,
     research: viewResearch, facilities: viewFacilities, spacecraft: viewSpacecraft,
     launchvehicles: viewLaunchVehicles, modules: viewModules, bodies: viewBodies,
-    terraform: viewTerraform, resources: viewResources, progression: viewProgression
+    terraform: viewTerraform, resources: viewResources, economy: viewEconomy,
+    progression: viewProgression
   };
   function currentTab() {
     var h = (location.hash || "#/home").replace(/^#\//, "");
@@ -210,6 +212,7 @@
     pageHeader(mount, "Solar Expanse Hub",
       "One page for the data and the math — so you don't have to bounce between six sites. " +
       "Data is extracted straight from the game's own files (v" + esc(DATA.meta.game_version) + ").");
+    homeDashboard(mount);
 
     var stats = el('<div class="panel"></div>');
     stats.appendChild(el("<h3>Game data loaded</h3>"));
@@ -290,9 +293,11 @@
           { key: "era", label: "Era", html: function (r) { return eraBadge(r.era); } },
           { key: "cost_hours", label: "Cost (h)", num: true, html: function (r) { return fmtHours(r.cost_hours); } },
           { key: "prereqs", label: "Prereqs", get: function (r) { return r.prereqs.length; }, html: function (r) {
-              return r.prereqs.length ? r.prereqs.map(function (p) { return esc(p.name); }).join(", ") : '<span class="muted">—</span>'; }, cls: "desccell" },
-          { key: "unlocks", label: "Unlocks", get: function (r) { return r.unlocks.join(" "); }, html: function (r) {
-              return r.unlocks.length ? esc(r.unlocks.join(" · ")) : '<span class="muted">—</span>'; }, cls: "desccell" },
+              return r.prereqs.length ? r.prereqs.map(function (p) { return '<a href="#/planner" class="goto-plan" data-id="' + esc(p.id) + '">' + esc(p.name) + "</a>"; }).join(", ") : '<span class="muted">—</span>'; }, cls: "desccell" },
+          { key: "unlocks", label: "Unlocks", get: function (r) { return (r.unlock_links || []).length; }, html: function (r) {
+              var links = (r.unlock_links || []).map(resolveUnlockToken).filter(Boolean);
+              if (!links.length) { var disp = (r.unlocks || []).filter(function (u) { return u && u !== "—"; }); return disp.length ? esc(disp.join(" · ")) : '<span class="muted">—</span>'; }
+              return links.map(function (t) { return '<a href="#/' + t.tab + '" class="xlink" data-tab="' + esc(t.tab) + '" data-name="' + esc(t.name) + '" data-cat="' + esc(t.cat) + '">' + esc(t.name) + "</a>"; }).join(" "); }, cls: "desccell" },
           { key: "plan", label: "", html: function (r) { return '<button class="chip plan-btn" data-id="' + esc(r.id) + '">plan ▸</button>'; } }
         ],
         afterDraw: function (w) {
@@ -309,6 +314,7 @@
               location.hash = "#/planner";
             });
           });
+          wirePlanLinks(w); wireXLinks(w); applySearchJump(w, "research");
         }
       });
     }
@@ -636,7 +642,7 @@
         { key: "unlock", label: "Unlocked by", get: function (f) { return (f.unlocked_by[0] || {}).name || "zzz"; }, html: function (f) {
             return f.unlocked_by.length ? f.unlocked_by.map(function (u) { return '<a href="#/planner" class="goto-plan" data-id="' + esc(u.id) + '">' + esc(u.name) + "</a>"; }).join(", ") : '<span class="muted">start</span>'; }, cls: "desccell" }
       ],
-      afterDraw: wirePlanLinks
+      afterDraw: function (w) { wirePlanLinks(w); applySearchJump(w, "facilities"); }
     });
   }
   function wirePlanLinks(w) {
@@ -672,7 +678,7 @@
           { key: "cost", label: "Build cost", get: function (s) { return (s.build_cost || []).reduce(function (a, b) { return a + b.amount; }, 0); }, html: function (s) { return costPips(s.build_cost); } },
           { key: "unlock", label: "Unlocked by", html: function (s) { return s.unlocked_by.length ? s.unlocked_by.map(function (u) { return '<a href="#/planner" class="goto-plan" data-id="' + esc(u.id) + '">' + esc(u.name) + "</a>"; }).join(", ") : '<span class="muted">start</span>'; }, cls: "desccell" }
         ],
-        afterDraw: wirePlanLinks
+        afterDraw: function (w) { wirePlanLinks(w); applySearchJump(w, "spacecraft"); }
       });
     }
     build2();
@@ -682,23 +688,41 @@
   // MODULES (reference)
   // =========================================================================
   function viewModules(mount) {
-    pageHeader(mount, "Modules &amp; crew transports", "Spacecraft payload — shipped pre-assembled, so you pay their mass in cargo.");
+    pageHeader(mount, "Modules &amp; crew transports",
+      "Spacecraft payload — shipped pre-assembled, so you pay their mass in cargo. Mining / refining / crew / probe roles included.");
+    function minesPips(m) {
+      if (!m.mines || !m.mines.length) return '<span class="muted">—</span>';
+      return m.mines.map(function (r) { return '<img src="' + resIcon(r) + '" alt="" title="' + esc(resName(r)) + '" style="width:16px;height:16px;vertical-align:-3px;margin-right:2px">'; }).join("");
+    }
+    function nameCell(m) {
+      var sub = (m.wiki_name && m.wiki_name !== m.name) ? '<br><span class="muted" style="font-size:11px">wiki: ' + esc(m.wiki_name) + "</span>" : "";
+      return esc(m.name) + lockBadge(m.is_locked) + sub;
+    }
+    function costSum(m) { return (m.build_cost || []).reduce(function (s, b) { return s + (b.amount || 0); }, 0); }
+    function days(m) { return m.build_time_days == null ? "—" : fmtInt(m.build_time_days); }
     var p1 = el('<div class="panel"><h3>Space modules</h3></div>'); mount.appendChild(p1);
     makeTable(p1, {
-      rows: DATA.space_modules, placeholder: "Filter modules…", search: ["name", "category"], initialSort: "name",
+      rows: DATA.space_modules, placeholder: "Filter modules…", search: ["name", "category", "role", "description"], initialSort: "name",
       cols: [
-        { key: "name", label: "Module", cls: "namecell", html: function (m) { return esc(m.name) + lockBadge(m.is_locked); } },
-        { key: "category", label: "Category", html: function (m) { return '<span class="badge cat">' + esc(m.category) + "</span>"; } },
-        { key: "mass", label: "Mass (t)", num: true, html: function (m) { return fmtInt(m.mass); } }
+        { key: "name", label: "Module", cls: "namecell", html: nameCell },
+        { key: "role", label: "Role", html: function (m) { return m.role ? esc(m.role) : '<span class="muted">—</span>'; } },
+        { key: "mines", label: "Mines", get: function (m) { return (m.mines || []).length; }, html: minesPips },
+        { key: "mass", label: "Mass (t)", num: true, html: function (m) { return fmtInt(m.mass); } },
+        { key: "cost", label: "Build cost", get: costSum, html: function (m) { return costPips(m.build_cost); } },
+        { key: "build_time_days", label: "Days", num: true, html: days },
+        { key: "description", label: "Notes", cls: "desccell", html: function (m) { return esc(m.description || ""); } }
       ]
     });
     var p2 = el('<div class="panel"><h3>Crew transports</h3></div>'); mount.appendChild(p2);
     makeTable(p2, {
-      rows: DATA.crew_transports, placeholder: "Filter…", search: ["name"], initialSort: "capacity",
+      rows: DATA.crew_transports, placeholder: "Filter…", search: ["name", "description"], initialSort: "capacity",
       cols: [
-        { key: "name", label: "Transport", cls: "namecell", html: function (m) { return esc(m.name) + lockBadge(m.is_locked); } },
+        { key: "name", label: "Transport", cls: "namecell", html: nameCell },
         { key: "capacity", label: "Seats", num: true },
-        { key: "mass", label: "Mass empty (t)", num: true, html: function (m) { return fmtInt(m.mass); } }
+        { key: "mass", label: "Mass empty (t)", num: true, html: function (m) { return fmtInt(m.mass); } },
+        { key: "cost", label: "Build cost", get: costSum, html: function (m) { return costPips(m.build_cost); } },
+        { key: "build_time_days", label: "Days", num: true, html: days },
+        { key: "description", label: "Notes", cls: "desccell", html: function (m) { return esc(m.description || ""); } }
       ]
     });
   }
@@ -905,7 +929,8 @@
         { key: "launch_cost", label: "Launch ($)", num: true, html: function (v) { return v.launch_cost == null ? "—" : "$" + fmtInt(v.launch_cost); } },
         { key: "maint_per_mo", label: "Upkeep ($/mo)", num: true, html: function (v) { return v.maint_per_mo == null ? "—" : "$" + fmtInt(v.maint_per_mo); } },
         { key: "description", label: "Notes", cls: "desccell", html: function (v) { return esc(v.description || ""); } }
-      ]
+      ],
+      afterDraw: function (w) { applySearchJump(w, "launchvehicles"); }
     });
     if ((DATA.launch_methods || []).length) {
       var p2 = el('<div class="panel"><h3>Launch methods &amp; infrastructure</h3></div>'); mount.appendChild(p2);
@@ -1089,6 +1114,138 @@
   }
 
   // =========================================================================
+  // ECONOMY — power balance + supply chains (qualitative; no rate data exists)
+  // =========================================================================
+  function viewEconomy(mount) {
+    pageHeader(mount, "Economy",
+      "Plan a colony's power and supply chains. The public data gives exact power and which facility makes/uses each resource — but <b>not</b> per-resource throughput rates, so this shows the production web, not tonnes/day. (For live throughput, import a save into the Expansion Planner.)");
+    var pwr = el('<div class="panel"><h3>Power</h3></div>');
+    pwr.appendChild(el('<p class="page-sub">Generators (power out) and loads (power in). Balance a colony so generation ≥ consumption.</p>'));
+    var pwrRows = DATA.facilities.filter(function (f) { return (f.power_production || 0) > 0 || (f.energy_consumption || 0) > 0; });
+    makeTable(pwr, {
+      rows: pwrRows, placeholder: "Filter facilities…", search: ["name", "category"], initialSort: "power_production", initialAsc: false,
+      cols: [
+        { key: "name", label: "Facility", cls: "namecell" },
+        { key: "category", label: "Category", html: function (f) { return '<span class="badge cat">' + esc(f.category) + "</span>"; } },
+        { key: "power_production", label: "Power +", num: true, html: function (f) { return f.power_production ? fmtInt(f.power_production) : "—"; } },
+        { key: "energy_consumption", label: "Power −", num: true, html: function (f) { return f.energy_consumption ? num(f.energy_consumption, 2) : "—"; } },
+        { key: "workers_required", label: "Workers", num: true, html: function (f) { return fmtInt(f.workers_required); } }
+      ]
+    });
+    mount.appendChild(pwr);
+    var sc = el('<div class="panel"><h3>Supply chains</h3></div>');
+    sc.appendChild(el('<p class="page-sub">For each resource: which facilities produce it, and which consume it.</p>'));
+    makeTable(sc, {
+      rows: DATA.resources, placeholder: "Filter resources…", search: ["name", "type"], initialSort: "name",
+      cols: [
+        { key: "name", label: "Resource", cls: "namecell", html: function (r) { return '<img src="' + resIcon(r.id) + '" alt="" style="width:18px;height:18px;vertical-align:-4px;margin-right:6px">' + esc(r.name); } },
+        { key: "producers", label: "Produced by", cls: "desccell", get: function (r) { return (r.producers || []).length; }, html: function (r) { return (r.producers && r.producers.length) ? esc(r.producers.join(", ")) : '<span class="muted">— (mined / imported)</span>'; } },
+        { key: "consumers", label: "Consumed by", cls: "desccell", get: function (r) { return (r.consumers || []).length; }, html: function (r) { return (r.consumers && r.consumers.length) ? esc(r.consumers.join(", ")) : '<span class="muted">—</span>'; } }
+      ]
+    });
+    mount.appendChild(sc);
+  }
+
+  // =========================================================================
+  // TRIP PLANNER — launch window + cruise time + delta-v (uses TripMath)
+  // =========================================================================
+  function viewTrip(mount) {
+    pageHeader(mount, "Trip planner",
+      "Pick where you are and where you're heading — get the next launch window, the one-way cruise time, and the delta-v budget. Heliocentric Hohmann estimate; see the notes under each result.");
+    if (typeof TripMath === "undefined") { mount.appendChild(el('<div class="callout">Trip math module failed to load.</div>')); return; }
+
+    var planetsByName = {}; DATA.planets.forEach(function (p) { planetsByName[p.name] = p; });
+    var groups = [
+      { kind: "planet", label: "Planets", rows: DATA.planets, lbl: function (b) { return b.name; } },
+      { kind: "moon", label: "Moons", rows: DATA.moons, lbl: function (b) { return b.name + " (" + b.parent + ")"; } },
+      { kind: "asteroid", label: "Asteroids", rows: DATA.asteroids, lbl: function (b) { return b.name; } },
+      { kind: "comet", label: "Comets", rows: DATA.comets, lbl: function (b) { return b.name; } }
+    ];
+    function optionsHtml(sel) {
+      return groups.map(function (g) {
+        var opts = g.rows.slice()
+          .filter(function (b) { return TripMath.isTransferComputable(b, g.kind, planetsByName); })
+          .map(function (b) {
+            var v = g.kind + "|" + b.name;
+            return '<option value="' + esc(v) + '"' + (v === sel ? " selected" : "") + ">" + esc(g.lbl(b)) + "</option>";
+          }).join("");
+        return '<optgroup label="' + esc(g.label) + '">' + opts + "</optgroup>";
+      }).join("");
+    }
+    function resolve(v) {
+      if (!v) return null;
+      var i = v.indexOf("|"), kind = v.slice(0, i), nm = v.slice(i + 1);
+      var g = groups.filter(function (x) { return x.kind === kind; })[0]; if (!g) return null;
+      var b = g.rows.filter(function (r) { return r.name === nm; })[0];
+      return b ? { body: b, kind: kind } : null;
+    }
+
+    var st = loadJSON("se-trip", {});
+    var panel = el('<div class="panel"></div>');
+    panel.appendChild(el("<h3>Route</h3>"));
+    var ctr = el('<div class="controls"></div>');
+    var fromSel = el('<select style="min-width:200px">' + optionsHtml(st.from || "planet|Earth") + "</select>");
+    var toSel = el('<select style="min-width:200px">' + optionsHtml(st.to || "planet|Mars") + "</select>");
+    ctr.appendChild(el('<label class="check">From</label>')); ctr.appendChild(fromSel);
+    ctr.appendChild(el('<label class="check">To</label>')); ctr.appendChild(toSel);
+    panel.appendChild(ctr);
+    var out = el("<div></div>"); panel.appendChild(out);
+    mount.appendChild(panel);
+
+    function draw() {
+      saveJSON("se-trip", { from: fromSel.value, to: toSel.value });
+      out.innerHTML = "";
+      var r = TripMath.transferBetween(resolve(fromSel.value), resolve(toSel.value), planetsByName);
+      if (!r || r.error) { out.appendChild(el('<div class="callout">' + esc((r && r.error) || "Pick an origin and destination.") + "</div>")); return; }
+      var win = isFinite(r.synodic_days)
+        ? "A launch window opens every <b>" + fmtInt(r.synodic_days) + " days</b> (~" + num(TripMath.daysToMonths(r.synodic_days), 1) + " months)."
+        : "No recurring window (co-orbital).";
+      out.appendChild(el(
+        '<div class="cols">' +
+          '<div><h4 style="margin:0 0 6px">⏱️ Timing</h4>' +
+            "<p>" + win + "</p>" +
+            '<p class="muted">' + esc(TripMath.nextWindowPhaseText(r.origin_axis_au, r.dest_axis_au)) + "</p>" +
+            "<p><b>" + fmtInt(r.transfer_days) + " days</b> (~" + num(TripMath.daysToMonths(r.transfer_days), 1) + " months) one-way cruise.</p></div>" +
+          '<div><h4 style="margin:0 0 6px">🚀 Delta-v (cruise budget)</h4>' +
+            '<table class="totals"><tbody>' +
+            '<tr><td>Depart burn</td><td class="num">' + num(r.dv_depart_kms, 2) + " km/s</td></tr>" +
+            '<tr><td>Arrive burn</td><td class="num">' + num(r.dv_arrive_kms, 2) + " km/s</td></tr>" +
+            '<tr class="grand"><td>Total</td><td class="num">' + num(r.dv_total_kms, 2) + " km/s</td></tr>" +
+            "</tbody></table></div>" +
+        "</div>"));
+      var note = el('<div class="callout" style="border-left-color:var(--warn)"><b>Notes</b></div>');
+      var ul = el('<ul class="muted" style="margin:6px 0 0;padding-left:18px;font-size:12.5px"></ul>');
+      (r.notes || []).forEach(function (n) { ul.appendChild(el("<li>" + esc(n) + "</li>")); });
+      note.appendChild(ul); out.appendChild(note);
+      var ts = resolve(toSel.value);
+      if (ts) out.appendChild(el('<p style="margin-top:10px"><a href="#/expansion">Plan a build-out at ' + esc(ts.body.name) + " &rarr;</a></p>"));
+    }
+    fromSel.addEventListener("change", draw);
+    toSel.addEventListener("change", draw);
+    draw();
+
+    var earth = planetsByName["Earth"];
+    if (earth) {
+      var ref = el('<div class="panel"><h3>Reachability from Earth</h3></div>');
+      ref.appendChild(el('<p class="page-sub">One-way Hohmann cruise time, launch-window spacing, and cruise delta-v from Earth to each planet.</p>'));
+      var rows = DATA.planets.filter(function (p) { return p.name !== "Earth" && p.semi_major_au; }).map(function (p) {
+        var t = TripMath.transfer(earth.semi_major_au, p.semi_major_au);
+        return { name: p.name, dv: t.dv_total_kms, days: t.transfer_days, syn: t.synodic_days };
+      });
+      makeTable(ref, {
+        rows: rows, placeholder: "Filter…", search: ["name"], initialSort: "dv",
+        cols: [
+          { key: "name", label: "Destination", cls: "namecell" },
+          { key: "dv", label: "Δv (km/s)", num: true, html: function (r) { return num(r.dv, 2); } },
+          { key: "days", label: "Cruise (days)", num: true, html: function (r) { return fmtInt(r.days); } },
+          { key: "syn", label: "Window (days)", num: true, html: function (r) { return isFinite(r.syn) ? fmtInt(r.syn) : "—"; } }
+        ]
+      });
+      mount.appendChild(ref);
+    }
+  }
+
+  // =========================================================================
   // EXPANSION PLANNER (save-aware): destination + need/have/short + fleet trips
   // =========================================================================
   function viewExpansion(mount) {
@@ -1204,6 +1361,219 @@
   function uniq(a) { return Array.from(new Set(a)); }
 
   // =========================================================================
+  // SHARED: unlock-token resolver + cross-tab "jump & flash" (search + x-links)
+  // =========================================================================
+  var pendingSearchJump = null;
+  function resolveUnlockToken(tok) {
+    if (!tok || tok === "—") return null;
+    if (tok.indexOf("facility-") === 0) {
+      var fid = "build_" + tok.slice(9).replace(/-/g, "_");
+      var f = IDX.facilities[fid];
+      return f ? { cat: "facilities", id: fid, name: f.name, tab: "facilities" } : null;
+    }
+    if (tok.indexOf("spacecraft-") === 0) {
+      var s = IDX.spacecraftById[tok];
+      return s ? { cat: "spacecraft", id: tok, name: s.name, tab: "spacecraft" } : null;
+    }
+    if (tok.indexOf("lv-") === 0) {
+      var rest = tok.slice(3);
+      if (rest.indexOf("lv-") === 0) rest = rest.slice(3);
+      var lv = IDX.launchVehicles && IDX.launchVehicles[rest];
+      return lv ? { cat: "launch_vehicles", id: rest, name: lv.name, tab: "launchvehicles" } : null;
+    }
+    return null;
+  }
+  function applySearchJump(tblWrap, tabKey) {
+    if (!pendingSearchJump || pendingSearchJump.tab !== tabKey) return;
+    var want = pendingSearchJump.name; pendingSearchJump = null;
+    var cells = tblWrap.querySelectorAll("td.namecell, td:first-child");
+    for (var i = 0; i < cells.length; i++) {
+      if (cells[i].textContent.trim().indexOf(want) === 0) {
+        var tr = cells[i].closest("tr");
+        tr.classList.add("row-flash");
+        tr.scrollIntoView({ block: "center", behavior: "smooth" });
+        (function (row) { setTimeout(function () { row.classList.remove("row-flash"); }, 1600); })(tr);
+        break;
+      }
+    }
+  }
+  function wireXLinks(w) {
+    w.querySelectorAll(".xlink").forEach(function (a) {
+      a.addEventListener("click", function (e) {
+        e.preventDefault();
+        pendingSearchJump = { tab: a.getAttribute("data-tab"), name: a.getAttribute("data-name"), cat: a.getAttribute("data-cat") };
+        if (currentTab() === pendingSearchJump.tab) render(); else location.hash = "#/" + pendingSearchJump.tab;
+      });
+    });
+  }
+
+  // =========================================================================
+  // GLOBAL SEARCH (flat index built once at boot; linear scan per keystroke)
+  // =========================================================================
+  var SEARCH_IDX = [];
+  function buildSearchIndex() {
+    var ix = [];
+    function push(name, tab, cat, catLabel, sub, extra) {
+      if (!name) return;
+      ix.push({ id: ix.length, name: name, tab: tab, cat: cat, catLabel: catLabel, sub: sub || "",
+        hay: (name + " " + (sub || "") + " " + (extra || "")).toLowerCase() });
+    }
+    DATA.research.forEach(function (r) { push(r.name, "research", "research", "Research", r.branch + (r.released ? "" : " · unreleased"), r.description); });
+    DATA.facilities.forEach(function (f) { push(f.name, "facilities", "facility", "Facility", f.category); });
+    DATA.spacecraft.forEach(function (s) { push(s.name, "spacecraft", "ship", "Spacecraft", s.propulsion, s.description); });
+    DATA.launch_vehicles.forEach(function (v) { push(v.name, "launchvehicles", "lv", "Launch vehicle", v.reusable && v.reusable !== "No" ? "reusable" : "", v.description); });
+    DATA.space_modules.forEach(function (m) { push(m.name, "modules", "module", "Module", m.category); });
+    (DATA.crew_transports || []).forEach(function (m) { push(m.name, "modules", "crew", "Crew transport", m.capacity + " seats"); });
+    DATA.resources.forEach(function (r) { push(r.name, "resources", "resource", "Resource", r.type); });
+    DATA.planets.forEach(function (p) { push(p.name, "bodies", "body", "Planet", "Planet"); });
+    DATA.moons.forEach(function (m) { push(m.name, "bodies", "body", "Moon", "Moon of " + m.parent); });
+    DATA.asteroids.forEach(function (a) { push(a.name, "bodies", "body", "Asteroid", a.region); });
+    (DATA.comets || []).forEach(function (c) { push(c.name, "bodies", "body", "Comet", "Comet"); });
+    (DATA.exoplanets || []).forEach(function (e) { push(e.name, "bodies", "body", "Exoplanet", e.system + " · " + e.type); });
+    DATA.contracts.forEach(function (c) { push(c.name, "progression", "contract", "Contract", "Contract #" + c.order, c.premise); });
+    SEARCH_IDX = ix;
+  }
+  function searchAll(q) {
+    q = q.trim().toLowerCase();
+    if (q.length < 2) return [];
+    var out = [];
+    for (var i = 0; i < SEARCH_IDX.length; i++) {
+      var r = SEARCH_IDX[i], nm = r.name.toLowerCase(), score;
+      if (nm === q) score = 0;
+      else if (nm.indexOf(q) === 0) score = 1;
+      else if (nm.indexOf(" " + q) !== -1) score = 2;
+      else if (nm.indexOf(q) !== -1) score = 3;
+      else if (r.hay.indexOf(q) !== -1) score = 4;
+      else continue;
+      out.push({ r: r, score: score });
+    }
+    out.sort(function (a, b) { return a.score - b.score || a.r.name.localeCompare(b.r.name); });
+    return out.slice(0, 12).map(function (o) { return o.r; });
+  }
+  function setupGlobalSearch() {
+    var header = document.querySelector(".topbar");
+    var box = el(
+      '<div class="omni">' +
+        '<span class="omni-ic" aria-hidden="true">🔍</span>' +
+        '<input type="search" id="omni-input" placeholder="Search everything…  (press /)" autocomplete="off" role="combobox" aria-expanded="false" aria-controls="omni-results">' +
+        '<div class="omni-results" id="omni-results" role="listbox" hidden></div>' +
+      "</div>");
+    header.appendChild(box);
+    var input = box.querySelector("#omni-input");
+    var panel = box.querySelector("#omni-results");
+    var results = [], active = -1;
+    function close() { panel.hidden = true; panel.innerHTML = ""; input.setAttribute("aria-expanded", "false"); active = -1; }
+    function go(r) {
+      close(); input.value = ""; input.blur();
+      pendingSearchJump = { tab: r.tab, name: r.name, cat: r.cat };
+      if (currentTab() === r.tab) render(); else location.hash = "#/" + r.tab;
+    }
+    function draw() {
+      if (!results.length) { panel.innerHTML = '<div class="omni-empty">No matches</div>'; panel.hidden = false; return; }
+      panel.innerHTML = results.map(function (r, i) {
+        return '<div class="omni-row' + (i === active ? " active" : "") + '" role="option" data-i="' + i + '">' +
+          '<span class="omni-cat omni-cat-' + esc(r.cat) + '">' + esc(r.catLabel) + "</span>" +
+          '<span class="omni-name">' + esc(r.name) + "</span>" +
+          (r.sub ? '<span class="omni-sub">' + esc(r.sub) + "</span>" : "") + "</div>";
+      }).join("");
+      panel.hidden = false; input.setAttribute("aria-expanded", "true");
+      panel.querySelectorAll(".omni-row").forEach(function (row) {
+        row.addEventListener("mousedown", function (e) { e.preventDefault(); go(results[+row.getAttribute("data-i")]); });
+      });
+    }
+    function refresh() { results = searchAll(input.value); active = -1; if (input.value.trim().length < 2) close(); else draw(); }
+    input.addEventListener("input", refresh);
+    input.addEventListener("focus", function () { if (results.length) draw(); });
+    input.addEventListener("keydown", function (e) {
+      if (e.key === "ArrowDown") { e.preventDefault(); if (results.length) { active = (active + 1) % results.length; draw(); } }
+      else if (e.key === "ArrowUp") { e.preventDefault(); if (results.length) { active = (active - 1 + results.length) % results.length; draw(); } }
+      else if (e.key === "Enter") { if (active >= 0 && results[active]) { e.preventDefault(); go(results[active]); } else if (results[0]) { e.preventDefault(); go(results[0]); } }
+      else if (e.key === "Escape") { close(); input.value = ""; input.blur(); }
+    });
+    document.addEventListener("mousedown", function (e) { if (!box.contains(e.target)) close(); });
+    document.addEventListener("keydown", function (e) {
+      if (e.key !== "/" || e.ctrlKey || e.metaKey || e.altKey) return;
+      var t = e.target, tag = t && t.tagName;
+      if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || (t && t.isContentEditable)) return;
+      e.preventDefault(); input.focus();
+    });
+  }
+
+  // =========================================================================
+  // HOME DASHBOARD (save-aware): summary + smart next-step suggestions
+  // =========================================================================
+  function fleetSize() { return Object.keys(SAVE.fleet || {}).reduce(function (s, k) { return s + SAVE.fleet[k]; }, 0); }
+  function fleetCargoTotal() {
+    var total = 0, lines = [];
+    Object.keys(SAVE.fleet || {}).forEach(function (sid) {
+      var info = IDX.shipBySaveId[sid], cnt = SAVE.fleet[sid];
+      var cargo = info ? (info.cargo || 0) : 0;
+      total += cargo * cnt;
+      lines.push(cnt + "× " + (info ? info.name : sid) + " (" + fmtInt(cargo) + " t)");
+    });
+    return { total: total, lines: lines };
+  }
+  function nextSteps() {
+    var out = [];
+    var ready = DATA.research.filter(function (r) {
+      return r.released && !owned.has(r.id) && r.prereqs.every(function (p) { return owned.has(p.id); });
+    }).sort(function (a, b) { return (a.cost_hours || 0) - (b.cost_hours || 0); });
+    if (ready.length) {
+      var r = ready[0];
+      out.push({ icon: "🔬", title: "Cheapest tech you can start now",
+        body: "<b>" + esc(r.name) + "</b> <span class='muted'>(" + esc(r.branch) + ")</span><br>" + fmtHours(r.cost_hours) + " work-hours · no missing prerequisites.",
+        action: { href: "#/planner", label: "Plan it", onClick: function () { plannerTarget = { kind: "research", id: r.id }; } } });
+    }
+    var cargo = fleetCargoTotal();
+    if (cargo.total > 0) {
+      out.push({ icon: "🚀", title: "Your fleet carries " + fmtInt(cargo.total) + " t per trip",
+        body: cargo.lines.map(esc).join(" · ") + "<br><span class='muted'>Open the Expansion Planner to see how many trips a build-out needs.</span>",
+        action: { href: "#/expansion", label: "Plan an expansion" } });
+    }
+    var lockedFacs = DATA.facilities.filter(function (f) {
+      return f.unlocked_by && f.unlocked_by.length && !f.unlocked_by.some(function (u) { return owned.has(u.id); });
+    }).map(function (f) {
+      var cheapest = f.unlocked_by.map(function (u) { return IDX.research[u.id]; }).filter(Boolean).sort(function (a, b) { return (a.cost_hours || 0) - (b.cost_hours || 0); })[0];
+      return cheapest ? { fac: f, tech: cheapest } : null;
+    }).filter(Boolean).sort(function (a, b) { return (a.tech.cost_hours || 0) - (b.tech.cost_hours || 0); });
+    if (lockedFacs.length) {
+      var lf = lockedFacs[0];
+      out.push({ icon: "🏗️", title: "Unlock a new facility",
+        body: "<b>" + esc(lf.fac.name) + "</b> needs <b>" + esc(lf.tech.name) + "</b> <span class='muted'>(" + fmtHours(lf.tech.cost_hours) + " h)</span>.",
+        action: { href: "#/planner", label: "Plan the unlock", onClick: function () { plannerTarget = { kind: "research", id: lf.tech.id }; } } });
+    }
+    if (SAVE.money > 1e6) {
+      out.push({ icon: "💰", title: "Treasury looks healthy",
+        body: "$" + fmtInt(SAVE.money) + " banked — consider committing it to a build-out or the next launch-vehicle tier.",
+        action: { href: "#/build", label: "Open Build Calculator" } });
+    }
+    return out.slice(0, 4);
+  }
+  function homeDashboard(mount) {
+    if (!SAVE) return;
+    var card = el('<div class="panel dash"></div>');
+    card.appendChild(el('<h3>Your colony <span class="muted" style="font-weight:400;font-size:12px">— from imported save</span></h3>'));
+    var row = el('<div class="dash-stats"></div>');
+    [["🏢 " + esc(SAVE.company), "company"], ["$" + fmtInt(SAVE.money), "treasury"], [fmtInt(SAVE.population), "population"],
+     [SAVE.researchCount + " / " + DATA.research.length, "techs researched"], [fmtInt(fleetSize()), "ships in fleet"]
+    ].forEach(function (s) { row.appendChild(el('<div class="stat"><div class="big">' + s[0] + '</div><div class="lbl">' + s[1] + "</div></div>")); });
+    card.appendChild(row);
+    var sug = el('<div class="dash-suggest"></div>');
+    nextSteps().forEach(function (s) {
+      var c = el('<div class="suggest-card"></div>');
+      c.innerHTML = '<div class="suggest-h">' + s.icon + " " + esc(s.title) + '</div>' + '<div class="suggest-b">' + s.body + "</div>";
+      if (s.action) {
+        var a = el('<a class="suggest-go" href="' + s.action.href + '">' + esc(s.action.label) + " →</a>");
+        if (s.action.onClick) a.addEventListener("click", s.action.onClick);
+        c.appendChild(a);
+      }
+      sug.appendChild(c);
+    });
+    card.appendChild(sug);
+    mount.appendChild(card);
+  }
+
+  // =========================================================================
   // Boot
   // =========================================================================
   function buildIndexes() {
@@ -1211,6 +1581,7 @@
     IDX.facilities = {}; DATA.facilities.forEach(function (f) { IDX.facilities[f.id] = f; });
     IDX.spacecraftById = {}; DATA.spacecraft.forEach(function (s) { IDX.spacecraftById[s.id] = s; });
     IDX.resName = {}; DATA.resources.forEach(function (r) { IDX.resName[r.id] = r.name; });
+    IDX.launchVehicles = {}; (DATA.launch_vehicles || []).forEach(function (v) { IDX.launchVehicles[v.id] = v; });
     // map save ship type id (underscore) -> {name,cargo} for fleet logistics
     IDX.shipBySaveId = {};
     DATA.spacecraft.forEach(function (s) {
@@ -1232,6 +1603,8 @@
         "Fan-made; not affiliated with SpaceOps.";
       window.addEventListener("hashchange", render);
       setupImportBar();
+      buildSearchIndex();
+      setupGlobalSearch();
       render();
     })
     .catch(function (err) {
