@@ -590,7 +590,7 @@
   }
 
   function viewBuild(mount) {
-    pageHeader(mount, "Build &amp; Cost",
+    pageHeader(mount, "Build & Cost",
       "Add what you want to build; discounts from research you've ticked apply automatically (additive, exactly like the game). " +
       "Pick an optional destination — with a save imported you also see what you have, what's short, and how many fleet trips it takes.");
 
@@ -913,7 +913,7 @@
   // MODULES (reference)
   // =========================================================================
   function viewModules(mount) {
-    pageHeader(mount, "Modules &amp; crew transports",
+    pageHeader(mount, "Modules & crew transports",
       "Spacecraft payload — shipped pre-assembled, so you pay their mass in cargo. Mining / refining / crew / probe roles included.");
     function minesPips(m) {
       if (!m.mines || !m.mines.length) return '<span class="muted">—</span>';
@@ -1945,7 +1945,7 @@
     if (SAVE.money > 1e6) {
       out.push({ icon: "💰", title: "Treasury looks healthy",
         body: "$" + fmtInt(SAVE.money) + " banked — consider committing it to a build-out or the next launch-vehicle tier.",
-        action: { href: "#/build", label: "Open Build &amp; Cost" } });
+        action: { href: "#/build", label: "Open Build & Cost" } });
     }
     return out.slice(0, 4);
   }
