@@ -224,6 +224,11 @@ def parse_asteroid_taxonomy():
 # ---- merge ------------------------------------------------------------------
 def main(write):
     G = json.load(open(GAMEDATA, encoding="utf-8"))
+    # Correct a digit-transposition typo inherited from the wiki (planets.md lists
+    # Saturn 368.3); the real/in-game mass is 568.34e24 kg (matches the game asset CSV).
+    for _p in G["planets"]:
+        if _p.get("name") == "Saturn" and _p.get("mass_e24kg") == 368.3:
+            _p["mass_e24kg"] = 568.34
     before = {k: json.dumps(G.get(k), sort_keys=True) for k in PROTECTED if k != "meta"}
 
     resources = parse_resources()

@@ -804,7 +804,9 @@
   // TERRAFORMING (reference + habitability lookup)
   // =========================================================================
   function viewTerraform(mount) {
-    pageHeader(mount, "Terraforming", "Per-resource thermal constants and the habitability scoring the game uses.");
+    pageHeader(mount, "Terraforming",
+      "Simulate a body's climate with the game's real physics (Stefan-Boltzmann + greenhouse), or use the habitability buckets below.");
+    if (typeof TerraSim !== "undefined") buildClimateSim(mount);
 
     var tf = DATA.terraforming;
 
@@ -883,6 +885,74 @@
       fp.appendChild(el("<div class='placed-row'><span class='pname'>" + esc(f.name) + "</span><span class='muted'>" + esc(d) + "</span></div>"));
     });
     mount.appendChild(fp);
+  }
+
+  // =========================================================================
+  // TERRAFORMING CLIMATE SIM (TerraSim) — game-accurate physics
+  // =========================================================================
+  function buildClimateSim(mount) {
+    var bodies = DATA.planets.filter(function (p) { return TerraSim.PLANETS_BY_NAME[p.name.toUpperCase()]; });
+    if (!bodies.length) return;
+    var st = loadJSON("se-terra", {});
+    var panel = el('<div class="panel"><h3>Climate simulator</h3></div>');
+    panel.appendChild(el('<p class="page-sub">Pick a body, set its atmosphere (kilotonnes of gas) and add mirrors/shades. Temperature uses the game\'s Stefan-Boltzmann + greenhouse model; habitability is the in-game weighted score (−100…100).</p>'));
+    var ctr = el('<div class="controls"></div>');
+    var bodySel = el('<select style="min-width:140px">' + bodies.map(function (b) { return "<option" + (b.name === (st.body || "Mars") ? " selected" : "") + ">" + esc(b.name) + "</option>"; }).join("") + "</select>");
+    ctr.appendChild(el('<label class="check">Body</label>')); ctr.appendChild(bodySel);
+    ctr.appendChild(el('<label class="check">Mirrors <input type="number" id="ts-mir" min="0" value="' + (st.mirrors || 0) + '" style="width:70px"></label>'));
+    ctr.appendChild(el('<label class="check">in orbit <select id="ts-mir-orb">' + TerraSim.MIRROR_ORBITS.map(function (o, i) { return '<option value="' + i + '"' + (i === (st.mirrorOrbit != null ? st.mirrorOrbit : 4) ? " selected" : "") + ">" + esc(o.name) + "</option>"; }).join("") + "</select></label>"));
+    ctr.appendChild(el('<label class="check">Shades <input type="number" id="ts-shd" min="0" value="' + (st.shades || 0) + '" style="width:70px"></label>'));
+    panel.appendChild(ctr);
+    var GASES = ["nitrogen", "oxygen", "co2", "water", "noblegas", "hydrogen"];
+    var atmCtr = el('<div class="controls"></div>');
+    GASES.forEach(function (id) {
+      var rn = TerraSim.RES_BY_ID[id] ? TerraSim.RES_BY_ID[id].name : id;
+      var v = (st.gas && st.gas[id]) || 0;
+      atmCtr.appendChild(el('<label class="check">' + esc(rn) + ' (kt) <input type="number" class="ts-gas" data-res="' + id + '" min="0" value="' + v + '" style="width:90px"></label>'));
+    });
+    panel.appendChild(atmCtr);
+    var prefill = el('<div class="muted" style="font-size:12px;margin:4px 0"></div>'); panel.appendChild(prefill);
+    var out = el("<div></div>"); panel.appendChild(out);
+    mount.appendChild(panel);
+    function readAtm() { var a = {}; atmCtr.querySelectorAll(".ts-gas").forEach(function (inp) { var v = parseFloat(inp.value) || 0; if (v > 0) a[inp.getAttribute("data-res")] = v; }); return a; }
+    function draw() {
+      var name = bodySel.value, atm = readAtm();
+      var iv = { mirrors: parseFloat(document.getElementById("ts-mir").value) || 0, mirrorOrbitIndex: parseInt(document.getElementById("ts-mir-orb").value, 10), shades: parseFloat(document.getElementById("ts-shd").value) || 0 };
+      saveJSON("se-terra", { body: name, gas: atm, mirrors: iv.mirrors, mirrorOrbit: iv.mirrorOrbitIndex, shades: iv.shades });
+      var body = bodies.filter(function (b) { return b.name === name; })[0];
+      var phys = TerraSim.PLANETS_BY_NAME[name.toUpperCase()];
+      if (phys) prefill.innerHTML = "Prefilled from physics: albedo " + num(phys.albedo, 2) + " · gravity " + num(phys.computedGravity, 2) + " m/s² · " + num(phys.distanceAU, 3) + " AU · internal flux " + num(phys.internalFlux, 2) + " W/m²";
+      out.innerHTML = "";
+      var r;
+      try { r = TerraSim.equilibrium(body, atm, iv); } catch (e) { r = { error: e.message }; }
+      if (!r || r.error) { out.appendChild(el('<div class="callout">' + esc((r && r.error) || "Could not simulate.") + "</div>")); return; }
+      renderClimate(out, r);
+    }
+    bodySel.addEventListener("change", draw);
+    ["ts-mir", "ts-mir-orb", "ts-shd"].forEach(function (id) { panel.querySelector("#" + id).addEventListener("input", draw); });
+    atmCtr.querySelectorAll(".ts-gas").forEach(function (inp) { inp.addEventListener("input", draw); });
+    draw();
+  }
+  function renderClimate(out, r) {
+    var conv = r.converged ? "" : ' <span class="muted">(did not converge in ' + r.ticks + ' ticks)</span>';
+    out.appendChild(el('<div class="cols">' +
+      '<div><h4 style="margin:0 0 6px">🌡️ Temperature</h4><p><b>' + num(r.temperatureC, 1) + " °C</b> (" + num(r.temperatureK, 1) + " K)" + conv + "</p>" +
+      '<p class="muted">Swing ±' + num(r.swings, 1) + " K · airless eq. " + num(r.equilibriumTempC, 1) + " °C</p></div>" +
+      '<div><h4 style="margin:0 0 6px">💨 Pressure &amp; air</h4><p><b>' + num(r.pressureAtm, 3) + " atm</b></p>" +
+      '<p class="muted">O₂ mass fraction ' + num((r.oxygenMassFrac || 0) * 100, 1) + "%</p></div>" +
+      '<div><h4 style="margin:0 0 6px">🌍 Habitability</h4><p><b>' + num(r.habitability, 1) + "</b> / 100</p></div>" +
+      "</div>"));
+    var ids = Object.keys(r.phaseByResource || {});
+    if (ids.length) {
+      var rows = ids.map(function (id) {
+        var p = r.phaseByResource[id];
+        var col = p.dominant === "gas" ? "var(--warn)" : p.dominant === "liquid" ? "var(--good)" : "var(--accent)";
+        var lbl = p.dominant.charAt(0).toUpperCase() + p.dominant.slice(1);
+        return "<tr><td>" + esc(p.name) + '</td><td style="color:' + col + '"><b>' + lbl + "</b></td><td class=\"num\">" + num(p.gasFrac * 100, 0) + "%</td><td class=\"num\">" + num(p.liquidFrac * 100, 0) + "%</td><td class=\"num\">" + num(p.solidFrac * 100, 0) + "%</td></tr>";
+      }).join("");
+      out.appendChild(el('<div class="tbl-wrap"><table class="data"><thead><tr><th>Resource</th><th>Phase</th><th class="num">Gas</th><th class="num">Liquid</th><th class="num">Solid</th></tr></thead><tbody>' + rows + "</tbody></table></div>"));
+    }
+    out.appendChild(el('<p class="muted" style="font-size:12px;margin:8px 0 0">Game-accurate model: atmosphere is in game-scale kilotonnes (~11,000 kt ≈ 1 atm on Earth); the greenhouse term has no saturation, so very thick atmospheres run hot. Airless equilibrium is the textbook blackbody temperature.</p>'));
   }
 
   // =========================================================================
@@ -1179,6 +1249,11 @@
       var b = g.rows.filter(function (r) { return r.name === nm; })[0];
       return b ? { body: b, kind: kind } : null;
     }
+    function bodyLongitudeDeg(spec) {
+      if (!spec || !window.BODY_LONGITUDES) return null;
+      var L = window.BODY_LONGITUDES, nm = spec.kind === "moon" ? spec.body.parent : spec.body.name;
+      return nm in L ? L[nm] : null;
+    }
 
     var st = loadJSON("se-trip", {});
     var panel = el('<div class="panel"></div>');
@@ -1188,12 +1263,15 @@
     var toSel = el('<select style="min-width:200px">' + optionsHtml(st.to || "planet|Mars") + "</select>");
     ctr.appendChild(el('<label class="check">From</label>')); ctr.appendChild(fromSel);
     ctr.appendChild(el('<label class="check">To</label>')); ctr.appendChild(toSel);
+    var todayISO = new Date().toISOString().slice(0, 10);
+    var dateInput = el('<input type="date" value="' + esc(st.startDate || todayISO) + '">');
+    ctr.appendChild(el('<label class="check">Depart on/after</label>')); ctr.appendChild(dateInput);
     panel.appendChild(ctr);
     var out = el("<div></div>"); panel.appendChild(out);
     mount.appendChild(panel);
 
     function draw() {
-      saveJSON("se-trip", { from: fromSel.value, to: toSel.value });
+      saveJSON("se-trip", { from: fromSel.value, to: toSel.value, startDate: dateInput.value });
       out.innerHTML = "";
       var r = TripMath.transferBetween(resolve(fromSel.value), resolve(toSel.value), planetsByName);
       if (!r || r.error) { out.appendChild(el('<div class="callout">' + esc((r && r.error) || "Pick an origin and destination.") + "</div>")); return; }
@@ -1219,9 +1297,29 @@
       note.appendChild(ul); out.appendChild(note);
       var ts = resolve(toSel.value);
       if (ts) out.appendChild(el('<p style="margin-top:10px"><a href="#/expansion">Plan a build-out at ' + esc(ts.body.name) + " &rarr;</a></p>"));
+      // dated launch windows (calendar dates) — uses BODY_LONGITUDES + LaunchWindows
+      var fSpec = resolve(fromSel.value), tSpec = resolve(toSel.value);
+      var aF = TripMath.heliocentricAxisAU(fSpec.body, fSpec.kind, planetsByName);
+      var aT = TripMath.heliocentricAxisAU(tSpec.body, tSpec.kind, planetsByName);
+      var lonF = bodyLongitudeDeg(fSpec), lonT = bodyLongitudeDeg(tSpec);
+      if (window.LaunchWindows && lonF != null && lonT != null && aF && aT) {
+        var startMs = Date.parse((dateInput.value || todayISO) + "T00:00:00Z");
+        if (!isFinite(startMs)) startMs = Date.parse(todayISO + "T00:00:00Z");
+        var wins = window.LaunchWindows.nextWindows(aF, lonF, aT, lonT, startMs, 5);
+        if (wins.length) {
+          var fmt = window.LaunchWindows.fmtDateUTC;
+          out.appendChild(el('<div style="margin-top:12px"><h4 style="margin:0 0 6px">📅 Next launch windows</h4>' +
+            '<table class="totals"><thead><tr><th>#</th><th>Launch</th><th>Arrive</th></tr></thead><tbody>' +
+            wins.map(function (w, i) { return "<tr><td>" + (i + 1) + '</td><td class="num">' + esc(fmt(w.launchMs)) + '</td><td class="num">' + esc(fmt(w.arriveMs)) + "</td></tr>"; }).join("") +
+            '</tbody></table><p class="muted" style="font-size:12px;margin:6px 0 0">Dates use mean longitudes at epoch 1959-01-01 (per the wiki) — treat the window spacing and transit time as exact, the absolute dates as a real-world-aligned reference.</p></div>'));
+        }
+      } else if (window.LaunchWindows && (lonF == null || lonT == null)) {
+        out.appendChild(el('<p class="muted" style="margin-top:10px">No epoch longitude on file for one of these bodies, so calendar dates aren\'t available — the timing and &Delta;v above still apply.</p>'));
+      }
     }
     fromSel.addEventListener("change", draw);
     toSel.addEventListener("change", draw);
+    dateInput.addEventListener("change", draw);
     draw();
 
     var earth = planetsByName["Earth"];
@@ -1242,6 +1340,63 @@
         ]
       });
       mount.appendChild(ref);
+    }
+
+    // ---- gravity-assist routes (button-triggered; the scan takes a few seconds) ----
+    if (window.GravityAssist) {
+      var gaPanel = el('<div class="panel"><h3>Gravity-assist routes</h3></div>');
+      gaPanel.appendChild(el('<p class="page-sub">Find a flyby planet that lowers the energy (v∞) to reach the destination versus a direct shot — uses the From / To / date above. Best-case ranking: it shows which body helps most, not a flyable Δv.</p>'));
+      var gaCtr = el('<div class="controls"></div>');
+      var gaBtn = el('<button class="btn">Find flyby routes</button>');
+      var gaStatus = el('<span class="muted"></span>');
+      gaCtr.appendChild(gaBtn); gaCtr.appendChild(gaStatus);
+      gaPanel.appendChild(gaCtr);
+      var gaOut = el("<div></div>"); gaPanel.appendChild(gaOut);
+      mount.appendChild(gaPanel);
+      gaBtn.addEventListener("click", function () {
+        gaOut.innerHTML = "";
+        function gaBody(spec) {
+          if (!spec) return null;
+          var a = TripMath.heliocentricAxisAU(spec.body, spec.kind, planetsByName), lon = bodyLongitudeDeg(spec);
+          if (a == null || lon == null) return null;
+          return { name: spec.kind === "moon" ? spec.body.parent : spec.body.name, a: a, longitude: lon };
+        }
+        var oB = gaBody(resolve(fromSel.value)), tB = gaBody(resolve(toSel.value));
+        if (!oB || !tB) { gaOut.appendChild(el('<div class="callout">Gravity-assist routing needs an orbital longitude on record for both bodies — not available for this pair.</div>')); return; }
+        if (oB.name === tB.name) { gaOut.appendChild(el('<div class="callout">Origin and destination share an orbit.</div>')); return; }
+        var byName = {};
+        DATA.planets.forEach(function (p) { if (window.BODY_LONGITUDES[p.name] != null) byName[p.name] = { name: p.name, a: p.semi_major_au, longitude: window.BODY_LONGITUDES[p.name] }; });
+        byName["Sun"] = { name: "Sun", a: 0, longitude: 0 };
+        byName[oB.name] = oB; byName[tB.name] = tB;
+        var bodies = Object.keys(byName).map(function (k) { return byName[k]; });
+        gaBtn.disabled = true; gaStatus.textContent = "Calculating…";
+        setTimeout(function () {
+          var gaStart = Date.parse((dateInput.value || todayISO) + "T00:00:00Z");
+          if (!isFinite(gaStart)) gaStart = Date.parse(todayISO + "T00:00:00Z");
+          var res;
+          try { res = window.GravityAssist.rankFlybys(oB.name, tB.name, bodies, gaStart, { windowYears: 12, maxStepsPerDim: 45 }); }
+          catch (e) { res = { error: e.message }; }
+          gaBtn.disabled = false; gaStatus.textContent = "";
+          gaOut.innerHTML = "";
+          if (!res || res.error) { gaOut.appendChild(el('<div class="callout">' + esc((res && res.error) || "No result.") + "</div>")); return; }
+          var d = res.direct || {};
+          gaOut.appendChild(el("<p>Direct (no flyby): <b>" + num(d.total_cost_kms, 2) + " km/s</b> total v∞.</p>"));
+          var cands = (res.candidates || []).filter(function (c) { return c.flybyBody !== oB.name && c.flybyBody !== tB.name; });
+          if (!cands.length) { gaOut.appendChild(el('<p class="muted">No flyby beats the direct route here.</p>')); return; }
+          var box = el("<div></div>"); gaOut.appendChild(box);
+          makeTable(box, {
+            rows: cands, placeholder: "Filter flyby…", search: ["flybyBody"], initialSort: "saved_kms", initialAsc: false,
+            cols: [
+              { key: "flybyBody", label: "Flyby", cls: "namecell" },
+              { key: "launch_vinf_kms", label: "v∞ launch", num: true, html: function (r) { return num(r.launch_vinf_kms, 2); } },
+              { key: "total_cost_kms", label: "Total v∞", num: true, html: function (r) { return num(r.total_cost_kms, 2); } },
+              { key: "saved_kms", label: "Saved vs direct", num: true, html: function (r) { var c = r.saved_kms > 0 ? "var(--good)" : "var(--bad)"; return '<span style="color:' + c + '">' + (r.saved_kms >= 0 ? "+" : "") + num(r.saved_kms, 2) + "</span>"; } },
+              { key: "transfer1_days", label: "Legs (days)", num: true, html: function (r) { return (isFinite(r.transfer1_days) ? fmtInt(r.transfer1_days) : "—") + " + " + (isFinite(r.transfer2_days) ? fmtInt(r.transfer2_days) : "—"); } }
+            ]
+          });
+          box.appendChild(el('<p class="muted" style="font-size:12px;margin:8px 0 0">Best-case free-rotation proxy; heliocentric, circular/coplanar, single flyby. Planets + Sun only.</p>'));
+        }, 30);
+      });
     }
   }
 
