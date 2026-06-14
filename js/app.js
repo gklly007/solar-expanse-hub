@@ -181,7 +181,8 @@
   var ROUTES = {
     home: viewHome, planner: viewPlanner, build: viewBuild, expansion: viewExpansion,
     research: viewResearch, facilities: viewFacilities, spacecraft: viewSpacecraft,
-    modules: viewModules, bodies: viewBodies, terraform: viewTerraform, resources: viewResources
+    launchvehicles: viewLaunchVehicles, modules: viewModules, bodies: viewBodies,
+    terraform: viewTerraform, resources: viewResources, progression: viewProgression
   };
   function currentTab() {
     var h = (location.hash || "#/home").replace(/^#\//, "");
@@ -214,7 +215,8 @@
     stats.appendChild(el("<h3>Game data loaded</h3>"));
     var sr = el('<div class="stat-row"></div>');
     [["research", "research nodes"], ["facilities", "facilities"], ["spacecraft", "spacecraft"],
-     ["planets", "planets"], ["moons", "moons"], ["asteroids", "asteroids"]].forEach(function (p) {
+     ["launch_vehicles", "launch vehicles"], ["planets", "planets"], ["moons", "moons"],
+     ["asteroids", "asteroids"], ["contracts", "contracts"]].forEach(function (p) {
       sr.appendChild(el('<div class="stat"><div class="big">' + DATA[p[0]].length + '</div><div class="lbl">' + p[1] + "</div></div>"));
     });
     stats.appendChild(sr);
@@ -706,7 +708,7 @@
   // =========================================================================
   function viewBodies(mount) {
     pageHeader(mount, "Celestial bodies", "Planets, moons, asteroids, comets and exoplanet systems — orbital and physical data.");
-    var subs = ["Planets", "Moons", "Asteroids", "Comets", "Exoplanets"];
+    var subs = ["Planets", "Moons", "Asteroids", "Asteroid types", "Comets", "Exoplanets"];
     var bar = el('<div class="subtabs"></div>');
     var holder = el("<div></div>");
     var cur = "Planets";
@@ -719,6 +721,16 @@
 
     function drawSub() {
       holder.innerHTML = "";
+      if (cur === "Asteroid types") {
+        (DATA.asteroid_taxonomy || []).forEach(function (t) {
+          var pn = el('<div class="panel"><h3>' + esc(t.name) + "</h3></div>");
+          if (t.description) pn.appendChild(el('<p class="page-sub">' + esc(t.description) + "</p>"));
+          var yr = (t.yields || []).map(function (y) { return "<tr><td>" + esc(y.tier) + "</td><td>" + esc(y.resource) + '</td><td class="num">' + esc(y.probability) + "</td></tr>"; }).join("");
+          pn.appendChild(el('<div class="tbl-wrap"><table class="data"><thead><tr><th>Tier</th><th>Resource</th><th class="num">Probability</th></tr></thead><tbody>' + yr + "</tbody></table></div>"));
+          holder.appendChild(pn);
+        });
+        return;
+      }
       if (cur === "Planets") makeTable(holder, { rows: DATA.planets, placeholder: "Filter…", search: ["name"], initialSort: "semi_major_au", cols: [
         { key: "name", label: "Planet", cls: "namecell" },
         { key: "mass_e24kg", label: "Mass (×10²⁴kg)", num: true, html: c("mass_e24kg") },
@@ -853,16 +865,113 @@
   // RESOURCES (reference)
   // =========================================================================
   function viewResources(mount) {
-    pageHeader(mount, "Resources", "The cargo/build resource catalogue. See the Terraforming tab for thermal properties.");
-    var p = el('<div class="panel"></div>');
-    var grid = el('<div class="grid"></div>');
-    DATA.resources.forEach(function (r) {
-      grid.appendChild(el('<div class="card" style="display:flex;align-items:center;gap:12px;padding:12px">' +
-        '<img src="' + resIcon(r.id) + '" style="width:34px;height:34px"><div><h4 style="margin:0">' + esc(r.name) +
-        '</h4><span class="muted">id: ' + esc(r.id) + "</span></div></div>"));
+    pageHeader(mount, "Resources",
+      "Every resource — market price, Earth export license, and which facilities produce or consume it. Thermal/phase data is on the Terraforming tab.");
+    function money(n) { return n == null ? "—" : "$" + num(n); }
+    makeTable(mount, {
+      rows: DATA.resources, placeholder: "Filter resources…", search: ["name", "type", "id"], initialSort: "name",
+      cols: [
+        { key: "name", label: "Resource", cls: "namecell", html: function (r) {
+            return '<img src="' + resIcon(r.id) + '" alt="" style="width:20px;height:20px;vertical-align:-5px;margin-right:6px">' + esc(r.name); } },
+        { key: "type", label: "Type", html: function (r) { return '<span class="badge cat">' + esc(r.type || "—") + "</span>"; } },
+        { key: "market_base", label: "Market ($/t)", num: true, html: function (r) { return money(r.market_base); } },
+        { key: "license", label: "Earth license ($/t)", num: true, html: function (r) { return money(r.license); } },
+        { key: "producers", label: "Produced by", cls: "desccell", get: function (r) { return (r.producers || []).length; },
+          html: function (r) { return (r.producers && r.producers.length) ? esc(r.producers.join(", ")) : '<span class="muted">—</span>'; } },
+        { key: "consumers", label: "Consumed by", cls: "desccell", get: function (r) { return (r.consumers || []).length; },
+          html: function (r) { return (r.consumers && r.consumers.length) ? esc(r.consumers.join(", ")) : '<span class="muted">—</span>'; } },
+        { key: "description", label: "Notes", cls: "desccell", html: function (r) { return esc(r.description || ""); } }
+      ]
     });
-    p.appendChild(grid);
-    mount.appendChild(p);
+  }
+
+  // =========================================================================
+  // LAUNCH VEHICLES + launch methods (reference)
+  // =========================================================================
+  function viewLaunchVehicles(mount) {
+    pageHeader(mount, "Launch vehicles", "Getting mass off a body: payload, reuse, crew capability, build cost, and per-launch cost.");
+    var p1 = el('<div class="panel"><h3>Launch vehicles</h3></div>'); mount.appendChild(p1);
+    makeTable(p1, {
+      rows: DATA.launch_vehicles, placeholder: "Filter launch vehicles…", search: ["name", "description", "reusable"],
+      initialSort: "payload_t", initialAsc: false,
+      cols: [
+        { key: "name", label: "Vehicle", cls: "namecell" },
+        { key: "payload_t", label: "Payload (t)", num: true, html: function (v) { return fmtInt(v.payload_t); } },
+        { key: "reusable", label: "Reusable" },
+        { key: "crew", label: "Crew" },
+        { key: "max_g", label: "Max G" },
+        { key: "cost", label: "Build cost", get: function (v) { return (v.build_cost || []).reduce(function (s, b) { return s + (b.amount || 0); }, 0); }, html: function (v) { return costPips(v.build_cost); } },
+        { key: "build_time_days", label: "Days", num: true, html: function (v) { return fmtInt(v.build_time_days); } },
+        { key: "launch_cost", label: "Launch ($)", num: true, html: function (v) { return v.launch_cost == null ? "—" : "$" + fmtInt(v.launch_cost); } },
+        { key: "maint_per_mo", label: "Upkeep ($/mo)", num: true, html: function (v) { return v.maint_per_mo == null ? "—" : "$" + fmtInt(v.maint_per_mo); } },
+        { key: "description", label: "Notes", cls: "desccell", html: function (v) { return esc(v.description || ""); } }
+      ]
+    });
+    if ((DATA.launch_methods || []).length) {
+      var p2 = el('<div class="panel"><h3>Launch methods &amp; infrastructure</h3></div>'); mount.appendChild(p2);
+      p2.appendChild(el('<p class="page-sub">Reusable launch infrastructure (space elevators, mass drivers…) that lowers launch cost.</p>'));
+      makeTable(p2, {
+        rows: DATA.launch_methods, placeholder: "Filter…", search: ["name", "description", "launch_bonus"], initialSort: "name",
+        cols: [
+          { key: "name", label: "Method", cls: "namecell" },
+          { key: "launch_bonus", label: "Launch bonus" },
+          { key: "cost", label: "Build cost", get: function (m) { return (m.build_cost || []).reduce(function (s, b) { return s + (b.amount || 0); }, 0); }, html: function (m) { return costPips(m.build_cost); } },
+          { key: "build_time_days", label: "Days", num: true, html: function (m) { return fmtInt(m.build_time_days); } },
+          { key: "workers", label: "Workers", num: true, html: function (m) { return m.workers == null ? "—" : fmtInt(m.workers); } },
+          { key: "maint_per_mo", label: "Upkeep ($/mo)", num: true, html: function (m) { return m.maint_per_mo == null ? "—" : "$" + fmtInt(m.maint_per_mo); } },
+          { key: "prereq", label: "Prereq", cls: "desccell", html: function (m) { return esc(m.prereq || "—"); } },
+          { key: "description", label: "Notes", cls: "desccell", html: function (m) { return esc(m.description || ""); } }
+        ]
+      });
+    }
+  }
+
+  // =========================================================================
+  // PROGRESSION: contracts, achievements, corporations (reference, sub-tabs)
+  // =========================================================================
+  function viewProgression(mount) {
+    pageHeader(mount, "Progression", "Story contracts, achievements, and which corporations each scenario lets you play.");
+    var subs = ["Contracts", "Achievements", "Corporations"];
+    var bar = el('<div class="subtabs"></div>');
+    var holder = el("<div></div>");
+    var cur = "Contracts";
+    subs.forEach(function (s) {
+      var b = el("<button" + (s === cur ? ' class="on"' : "") + ">" + s + "</button>");
+      b.addEventListener("click", function () { cur = s; bar.querySelectorAll("button").forEach(function (x) { x.classList.remove("on"); }); b.classList.add("on"); drawSub(); });
+      bar.appendChild(b);
+    });
+    mount.appendChild(bar); mount.appendChild(holder);
+    function list(arr) { return (arr && arr.length) ? arr.map(esc).join("<br>") : '<span class="muted">—</span>'; }
+    function drawSub() {
+      holder.innerHTML = "";
+      if (cur === "Contracts") makeTable(holder, {
+        rows: DATA.contracts, placeholder: "Filter contracts…", search: ["name", "premise", "prereq"], initialSort: "order",
+        cols: [
+          { key: "order", label: "#", num: true },
+          { key: "name", label: "Contract", cls: "namecell" },
+          { key: "prereq", label: "After", html: function (c) { return esc(c.prereq || "—"); } },
+          { key: "requirements", label: "Requirements", cls: "desccell", get: function (c) { return (c.requirements || []).length; }, html: function (c) { return list(c.requirements); } },
+          { key: "rewards", label: "Rewards", cls: "desccell", get: function (c) { return (c.rewards || []).length; }, html: function (c) { return list(c.rewards); } },
+          { key: "premise", label: "Premise", cls: "desccell", html: function (c) { return esc(c.premise || ""); } }
+        ]
+      });
+      else if (cur === "Achievements") makeTable(holder, {
+        rows: DATA.achievements, placeholder: "Filter achievements…", search: ["name", "earn_via", "trigger"], initialSort: "name",
+        cols: [
+          { key: "name", label: "Achievement", cls: "namecell" },
+          { key: "earn_via", label: "Earn via", cls: "desccell", html: function (a) { return esc(a.earn_via || a.trigger || "—"); } },
+          { key: "condition", label: "Condition", cls: "desccell", html: function (a) { return esc(a.condition || "—"); } }
+        ]
+      });
+      else {
+        var p = el('<div class="panel"><h3>Playable corporations by scenario</h3></div>');
+        (DATA.corporations || []).forEach(function (c) {
+          p.appendChild(el('<div class="placed-row"><span class="pname">' + esc(c.scenario) + '</span><span class="muted">' + esc((c.corporations || []).join(", ")) + "</span></div>"));
+        });
+        holder.appendChild(p);
+      }
+    }
+    drawSub();
   }
 
   // =========================================================================
