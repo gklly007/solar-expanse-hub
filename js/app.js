@@ -186,15 +186,85 @@
     terraform: viewTerraform, resources: viewResources, economy: viewEconomy,
     progression: viewProgression
   };
+
+  // ---- two-level navigation (layout only; every tabKey is an existing route) -
+  // Primary bar = these 5 groups; sub-nav lists the active group's items.
+  var GROUPS = [
+    { key: "home", label: "Home", items: [
+      { tab: "home", label: "Home" }
+    ] },
+    { key: "plan", label: "Plan", items: [
+      { tab: "build", label: "Build Calculator" },
+      { tab: "expansion", label: "Expansion Planner" },
+      { tab: "planner", label: "Research Planner" },
+      { tab: "economy", label: "Economy" }
+    ] },
+    { key: "travel", label: "Travel", items: [
+      { tab: "trip", label: "Trip Planner" },
+      { tab: "launchvehicles", label: "Launch Vehicles" }
+    ] },
+    { key: "worlds", label: "Worlds", items: [
+      { tab: "bodies", label: "Bodies" },
+      { tab: "terraform", label: "Terraforming" },
+      { tab: "resources", label: "Resources" }
+    ] },
+    { key: "reference", label: "Reference", items: [
+      { tab: "research", label: "Research" },
+      { tab: "facilities", label: "Facilities" },
+      { tab: "spacecraft", label: "Spacecraft" },
+      { tab: "modules", label: "Modules" },
+      { tab: "progression", label: "Progression" }
+    ] }
+  ];
+  var TAB_GROUP = {};  // tabKey -> group key
+  GROUPS.forEach(function (g) { g.items.forEach(function (it) { TAB_GROUP[it.tab] = g.key; }); });
+  function groupByKey(gkey) { for (var i = 0; i < GROUPS.length; i++) if (GROUPS[i].key === gkey) return GROUPS[i]; return null; }
+  function groupForTab(tab) { return groupByKey(TAB_GROUP[tab] || "home"); }
+  // remember the last sub-item visited per group, so re-clicking a group returns there
+  var lastTabInGroup = loadJSON("se-nav-last", {});
+
+  // Build the primary group bar once (data-driven). Sub-nav is (re)built per render.
+  function buildNav() {
+    var groupsBar = document.getElementById("nav-groups");
+    if (!groupsBar) return;
+    groupsBar.innerHTML = "";
+    GROUPS.forEach(function (g) {
+      var first = g.items[0];
+      var targetTab = (lastTabInGroup[g.key] && ROUTES[lastTabInGroup[g.key]]) ? lastTabInGroup[g.key] : first.tab;
+      var a = el('<a class="nav-group" data-group="' + esc(g.key) +
+        '" href="#/' + esc(targetTab) + '">' + esc(g.label) + "</a>");
+      groupsBar.appendChild(a);
+    });
+  }
+  function renderSubNav(tab) {
+    var sub = document.getElementById("nav-sub");
+    if (!sub) return;
+    var g = groupForTab(tab);
+    sub.innerHTML = "";
+    // single-item groups (Home) have no useful sub-nav; hide the row.
+    if (!g || g.items.length <= 1) { sub.classList.add("subnav-empty"); return; }
+    sub.classList.remove("subnav-empty");
+    g.items.forEach(function (it) {
+      var a = el('<a data-tab="' + esc(it.tab) + '" href="#/' + esc(it.tab) + '">' + esc(it.label) + "</a>");
+      a.classList.toggle("active", it.tab === tab);
+      sub.appendChild(a);
+    });
+  }
+
   function currentTab() {
     var h = (location.hash || "#/home").replace(/^#\//, "");
     return ROUTES[h] ? h : "home";
   }
   function render() {
     var tab = currentTab();
-    document.querySelectorAll("#tabs a").forEach(function (a) {
-      a.classList.toggle("active", a.getAttribute("data-tab") === tab);
+    var gkey = TAB_GROUP[tab] || "home";
+    lastTabInGroup[gkey] = tab; saveJSON("se-nav-last", lastTabInGroup);
+    // highlight the active group in the primary bar
+    document.querySelectorAll("#nav-groups .nav-group").forEach(function (a) {
+      a.classList.toggle("active", a.getAttribute("data-group") === gkey);
     });
+    // (re)build the sub-nav for the active group and highlight the active sub-item
+    renderSubNav(tab);
     view.innerHTML = "";
     window.scrollTo(0, 0);
     ROUTES[tab](view);
@@ -212,7 +282,28 @@
     pageHeader(mount, "Solar Expanse Hub",
       "One page for the data and the math — so you don't have to bounce between six sites. " +
       "Data is extracted straight from the game's own files (v" + esc(DATA.meta.game_version) + ").");
-    homeDashboard(mount);
+
+    if (!SAVE) {
+      // No save yet: lead with a big, inviting import hero.
+      var hero = el('<div class="panel home-hero"></div>');
+      hero.innerHTML =
+        '<div class="home-hero-icon">📁</div>' +
+        "<h3>Import your save to make this yours</h3>" +
+        '<p>Load a Solar Expanse save and the Hub fills in your research, stockpile and fleet — ' +
+        "so the planners show exactly what <i>you</i> still need and how to ship it.</p>" +
+        '<p class="muted home-hero-note">No save? No problem — every tool works without one. ' +
+        "You can also just drag a save file anywhere onto the page.</p>";
+      var heroBtn = el('<button class="btn home-hero-btn">📁 Import save</button>');
+      heroBtn.addEventListener("click", function () {
+        var ib = document.getElementById("import-btn");
+        if (ib) ib.click();
+      });
+      hero.appendChild(heroBtn);
+      mount.appendChild(hero);
+    } else {
+      // Save imported: lead with the live colony dashboard.
+      homeDashboard(mount);
+    }
 
     var stats = el('<div class="panel"></div>');
     stats.appendChild(el("<h3>Game data loaded</h3>"));
@@ -1757,6 +1848,7 @@
         '<a href="' + d.meta.sources.wiki + '" target="_blank" rel="noopener">Solar Expanse Wiki</a> pipeline. ' +
         "Fan-made; not affiliated with SpaceOps.";
       window.addEventListener("hashchange", render);
+      buildNav();
       setupImportBar();
       buildSearchIndex();
       setupGlobalSearch();

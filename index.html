@@ -15,22 +15,27 @@
         <span class="tagline">reference &amp; optimizer — one place</span>
       </div>
     </div>
-    <nav class="tabs" id="tabs">
-      <a href="#/home" data-tab="home">Home</a>
-      <a href="#/planner" data-tab="planner">Research Planner</a>
-      <a href="#/build" data-tab="build">Build Calculator</a>
-      <a href="#/expansion" data-tab="expansion">Expansion Planner</a>
-      <a href="#/trip" data-tab="trip">Trip Planner</a>
-      <a href="#/research" data-tab="research">Research</a>
-      <a href="#/facilities" data-tab="facilities">Facilities</a>
-      <a href="#/spacecraft" data-tab="spacecraft">Spacecraft</a>
-      <a href="#/launchvehicles" data-tab="launchvehicles">Launch Vehicles</a>
-      <a href="#/modules" data-tab="modules">Modules</a>
-      <a href="#/bodies" data-tab="bodies">Bodies</a>
-      <a href="#/terraform" data-tab="terraform">Terraforming</a>
-      <a href="#/resources" data-tab="resources">Resources</a>
-      <a href="#/economy" data-tab="economy">Economy</a>
-      <a href="#/progression" data-tab="progression">Progression</a>
+    <nav class="nav2" id="tabs" aria-label="Primary">
+      <!-- Two-level navigation is rendered by js/app.js (data-driven from GROUPS).
+           Static links kept below as a no-JS / pre-hydration fallback. -->
+      <div class="nav-groups" id="nav-groups"></div>
+      <div class="tabs subnav" id="nav-sub">
+        <a href="#/home" data-tab="home">Home</a>
+        <a href="#/planner" data-tab="planner">Research Planner</a>
+        <a href="#/build" data-tab="build">Build Calculator</a>
+        <a href="#/expansion" data-tab="expansion">Expansion Planner</a>
+        <a href="#/trip" data-tab="trip">Trip Planner</a>
+        <a href="#/research" data-tab="research">Research</a>
+        <a href="#/facilities" data-tab="facilities">Facilities</a>
+        <a href="#/spacecraft" data-tab="spacecraft">Spacecraft</a>
+        <a href="#/launchvehicles" data-tab="launchvehicles">Launch Vehicles</a>
+        <a href="#/modules" data-tab="modules">Modules</a>
+        <a href="#/bodies" data-tab="bodies">Bodies</a>
+        <a href="#/terraform" data-tab="terraform">Terraforming</a>
+        <a href="#/resources" data-tab="resources">Resources</a>
+        <a href="#/economy" data-tab="economy">Economy</a>
+        <a href="#/progression" data-tab="progression">Progression</a>
+      </div>
     </nav>
   </header>
 
