@@ -803,6 +803,32 @@
       }
       destBox.innerHTML = html;
       destBox.querySelectorAll(".goto-plan").forEach(function (a) { a.addEventListener("click", function () { plannerTarget = { kind: "research", id: a.getAttribute("data-id") }; }); });
+      // Phase 3: "See the launch window to <dest> →" cross-link to Trip Planner.
+      // Determine the trip "kind|name" value for this destination (planets, moons only).
+      var tripVal = null;
+      DATA.planets.forEach(function (p) { if (p.name === build.dest) tripVal = "planet|" + p.name; });
+      if (!tripVal) {
+        DATA.moons.forEach(function (m) {
+          if (m.name + " (" + m.parent + ")" === build.dest) tripVal = "moon|" + m.name;
+        });
+      }
+      if (!tripVal) {
+        DATA.asteroids.forEach(function (a) { if (a.name === build.dest) tripVal = "asteroid|" + a.name; });
+      }
+      if (!tripVal) {
+        (DATA.comets || []).forEach(function (c) { if (c.name === build.dest) tripVal = "comet|" + c.name; });
+      }
+      if (tripVal) {
+        var dispName = build.dest;
+        var winLink = el('<p style="margin-top:10px"><a href="#/trip">See the launch window to ' + esc(dispName) + " →</a></p>");
+        winLink.querySelector("a").addEventListener("click", function () {
+          // Pre-set se-trip.to — merge with existing se-trip so From / startDate survive.
+          var existingTrip = loadJSON("se-trip", {});
+          existingTrip.to = tripVal;
+          saveJSON("se-trip", existingTrip);
+        });
+        destBox.appendChild(winLink);
+      }
     }
 
     pf.addEventListener("input", drawPicker);
@@ -942,6 +968,47 @@
     });
     mount.appendChild(bar); mount.appendChild(holder);
 
+    // Phase 3: body row action helpers
+    // "Plan build here": only planets and moons appear in the destSel dropdown.
+    // build.dest format: "Mars" for planet, "Luna (Earth)" for moon.
+    function bodyBuildDest(bodyObj, kind) {
+      if (kind === "planet") return bodyObj.name;
+      if (kind === "moon") return bodyObj.name + " (" + bodyObj.parent + ")";
+      return null; // asteroids/comets not in destSel
+    }
+    // "Trip here": any body with a BODY_LONGITUDES entry can be routed.
+    // Trip value format: "kind|name"
+    function bodyTripVal(bodyObj, kind) {
+      if (!window.BODY_LONGITUDES) return null;
+      var nm = kind === "moon" ? bodyObj.parent : bodyObj.name;
+      if (!(nm in window.BODY_LONGITUDES)) return null;
+      return kind + "|" + bodyObj.name;
+    }
+    function makeBodyActionsHtml(bodyObj, kind) {
+      var parts = [];
+      var dest = bodyBuildDest(bodyObj, kind);
+      if (dest != null) parts.push('<button class="chip body-build-btn" data-dest="' + esc(dest) + '">build here</button>');
+      var tv = bodyTripVal(bodyObj, kind);
+      if (tv) parts.push('<button class="chip body-trip-btn" data-to="' + esc(tv) + '">trip here</button>');
+      return parts.join(" ");
+    }
+    function wireBodyActions(w) {
+      w.querySelectorAll(".body-build-btn").forEach(function (btn) {
+        btn.addEventListener("click", function () {
+          build.dest = btn.getAttribute("data-dest");
+          saveJSON("se-build", build);
+          location.hash = "#/build";
+        });
+      });
+      w.querySelectorAll(".body-trip-btn").forEach(function (btn) {
+        btn.addEventListener("click", function () {
+          var existingTrip = loadJSON("se-trip", {});
+          existingTrip.to = btn.getAttribute("data-to");
+          saveJSON("se-trip", existingTrip);
+          location.hash = "#/trip";
+        });
+      });
+    }
     function drawSub() {
       holder.innerHTML = "";
       if (cur === "Asteroid types") {
@@ -961,31 +1028,39 @@
         { key: "semi_major_au", label: "Axis (AU)", num: true, html: c("semi_major_au") },
         { key: "eccentricity", label: "Ecc.", num: true, html: c("eccentricity") },
         { key: "inclination_deg", label: "Incl. (°)", num: true, html: c("inclination_deg") },
-        { key: "moons", label: "Moons" }
-      ] });
+        { key: "moons", label: "Moons" },
+        { key: "_actions", label: "", get: function () { return ""; },
+          html: function (p) { return makeBodyActionsHtml(p, "planet"); } }
+      ], afterDraw: wireBodyActions });
       else if (cur === "Moons") makeTable(holder, { rows: DATA.moons, placeholder: "Filter… (try 'Jupiter')", search: ["name", "parent"], initialSort: "name", cols: [
         { key: "name", label: "Moon", cls: "namecell" },
         { key: "parent", label: "Parent", html: function (m) { return '<span class="badge cat">' + esc(m.parent) + "</span>"; } },
         { key: "mass_e24kg", label: "Mass (×10²⁴kg)", num: true, html: c("mass_e24kg") },
         { key: "distance_km", label: "Distance (km)", num: true, html: c("distance_km") },
         { key: "eccentricity", label: "Ecc.", num: true, html: c("eccentricity") },
-        { key: "inclination_deg", label: "Incl. (°)", num: true, html: c("inclination_deg") }
-      ] });
+        { key: "inclination_deg", label: "Incl. (°)", num: true, html: c("inclination_deg") },
+        { key: "_actions", label: "", get: function () { return ""; },
+          html: function (m) { return makeBodyActionsHtml(m, "moon"); } }
+      ], afterDraw: wireBodyActions });
       else if (cur === "Asteroids") makeTable(holder, { rows: DATA.asteroids, placeholder: "Filter… (try 'NEO')", search: ["name", "region"], initialSort: "semi_major_au", cols: [
         { key: "name", label: "Asteroid", cls: "namecell" },
         { key: "region", label: "Region", cls: "desccell", html: function (a) { return '<span class="badge cat">' + esc(a.region) + "</span>"; } },
         { key: "radius_km", label: "Radius (km)", num: true, html: c("radius_km") },
         { key: "semi_major_au", label: "Axis (AU)", num: true, html: c("semi_major_au") },
         { key: "eccentricity", label: "Ecc.", num: true, html: c("eccentricity") },
-        { key: "inclination_deg", label: "Incl. (°)", num: true, html: c("inclination_deg") }
-      ] });
+        { key: "inclination_deg", label: "Incl. (°)", num: true, html: c("inclination_deg") },
+        { key: "_actions", label: "", get: function () { return ""; },
+          html: function (a) { return makeBodyActionsHtml(a, "asteroid"); } }
+      ], afterDraw: wireBodyActions });
       else if (cur === "Comets") makeTable(holder, { rows: DATA.comets, placeholder: "Filter…", search: ["name"], initialSort: "name", cols: [
         { key: "name", label: "Comet", cls: "namecell" },
         { key: "radius_km", label: "Radius (km)", num: true, html: c("radius_km") },
         { key: "semi_major_au", label: "Axis (AU)", num: true, html: c("semi_major_au") },
         { key: "eccentricity", label: "Ecc.", num: true, html: c("eccentricity") },
-        { key: "inclination_deg", label: "Incl. (°)", num: true, html: c("inclination_deg") }
-      ] });
+        { key: "inclination_deg", label: "Incl. (°)", num: true, html: c("inclination_deg") },
+        { key: "_actions", label: "", get: function () { return ""; },
+          html: function (co) { return makeBodyActionsHtml(co, "comet"); } }
+      ], afterDraw: wireBodyActions });
       else makeTable(holder, { rows: DATA.exoplanets, placeholder: "Filter… (try a system)", search: ["name", "system", "type"], initialSort: "system", cols: [
         { key: "system", label: "System", html: function (e) { return '<span class="badge cat">' + esc(e.system) + "</span>"; } },
         { key: "name", label: "Body", cls: "namecell" },
@@ -993,6 +1068,7 @@
         { key: "semi_major_au", label: "Axis (AU)", num: true, html: c("semi_major_au") },
         { key: "mass_e24kg", label: "Mass (×10²⁴kg)", num: true, html: c("mass_e24kg") },
         { key: "radius_km", label: "Radius (km)", num: true, html: c("radius_km") }
+        // No actions column for exoplanets — no destSel entry and no BODY_LONGITUDES.
       ] });
     }
     function c(k) { return function (r) { return num(r[k]); }; }
@@ -1237,6 +1313,40 @@
     });
     mount.appendChild(bar); mount.appendChild(holder);
     function list(arr) { return (arr && arr.length) ? arr.map(esc).join("<br>") : '<span class="muted">—</span>'; }
+    // Phase 3: build lookup maps for requirement string resolution (research, spacecraft).
+    // Built lazily inside drawSub so IDX is guaranteed populated.
+    var reqResearchByName = null;   // lowercase name -> research id
+    var reqShipByName = null;       // lowercase name -> spacecraft id
+    function ensureReqMaps() {
+      if (reqResearchByName) return;
+      reqResearchByName = {};
+      DATA.research.forEach(function (r) { reqResearchByName[r.name.toLowerCase()] = r.id; });
+      reqShipByName = {};
+      DATA.spacecraft.forEach(function (s) { reqShipByName[s.name.toLowerCase()] = s.id; });
+    }
+    function renderReqHtml(reqStr) {
+      // Try to resolve "Research: X" and "Build spacecraft: X" to clickable links.
+      var colon = reqStr.indexOf(":");
+      if (colon > 0) {
+        var prefix = reqStr.slice(0, colon).trim();
+        var val = reqStr.slice(colon + 1).trim();
+        var valLower = val.toLowerCase();
+        if (prefix === "Research") {
+          var rid = reqResearchByName[valLower];
+          if (rid) return '<a href="#/planner" class="goto-plan" data-id="' + esc(rid) + '">' + esc(reqStr) + "</a>";
+        }
+        if (prefix === "Build spacecraft") {
+          var sid = reqShipByName[valLower];
+          if (sid) return '<a href="#/spacecraft" class="xlink" data-tab="spacecraft" data-name="' + esc(val) + '" data-cat="ship">' + esc(reqStr) + "</a>";
+        }
+      }
+      return esc(reqStr);
+    }
+    function listReqs(arr) {
+      if (!arr || !arr.length) return '<span class="muted">—</span>';
+      ensureReqMaps();
+      return arr.map(renderReqHtml).join("<br>");
+    }
     function drawSub() {
       holder.innerHTML = "";
       if (cur === "Contracts") makeTable(holder, {
@@ -1245,10 +1355,11 @@
           { key: "order", label: "#", num: true },
           { key: "name", label: "Contract", cls: "namecell" },
           { key: "prereq", label: "After", html: function (c) { return esc(c.prereq || "—"); } },
-          { key: "requirements", label: "Requirements", cls: "desccell", get: function (c) { return (c.requirements || []).length; }, html: function (c) { return list(c.requirements); } },
+          { key: "requirements", label: "Requirements", cls: "desccell", get: function (c) { return (c.requirements || []).length; }, html: function (c) { return listReqs(c.requirements); } },
           { key: "rewards", label: "Rewards", cls: "desccell", get: function (c) { return (c.rewards || []).length; }, html: function (c) { return list(c.rewards); } },
           { key: "premise", label: "Premise", cls: "desccell", html: function (c) { return esc(c.premise || ""); } }
-        ]
+        ],
+        afterDraw: function (w) { wirePlanLinks(w); wireXLinks(w); }
       });
       else if (cur === "Achievements") makeTable(holder, {
         rows: DATA.achievements, placeholder: "Filter achievements…", search: ["name", "earn_via", "trigger"], initialSort: "name",
@@ -1459,6 +1570,28 @@
     }
 
     var st = loadJSON("se-trip", {});
+    // Phase 3: if no explicit Trip destination saved, seed from Build & Cost dest
+    if (!st.to && build.dest) {
+      // build.dest is e.g. "Mars" or "Luna (Earth)"; map to trip value "kind|name"
+      var bdDest = build.dest;
+      var bdTripVal = null;
+      // try planets first (exact name match)
+      DATA.planets.forEach(function (p) { if (p.name === bdDest) bdTripVal = "planet|" + p.name; });
+      if (!bdTripVal) {
+        // try moons: stored as "MoonName (Parent)" in build.dest
+        DATA.moons.forEach(function (m) {
+          var label = m.name + " (" + m.parent + ")";
+          if (label === bdDest) bdTripVal = "moon|" + m.name;
+        });
+      }
+      if (!bdTripVal) {
+        DATA.asteroids.forEach(function (a) { if (a.name === bdDest) bdTripVal = "asteroid|" + a.name; });
+      }
+      if (!bdTripVal) {
+        (DATA.comets || []).forEach(function (c) { if (c.name === bdDest) bdTripVal = "comet|" + c.name; });
+      }
+      if (bdTripVal) st.to = bdTripVal;
+    }
     var panel = el('<div class="panel"></div>');
     panel.appendChild(el("<h3>Route</h3>"));
     var ctr = el('<div class="controls"></div>');
@@ -1499,7 +1632,20 @@
       (r.notes || []).forEach(function (n) { ul.appendChild(el("<li>" + esc(n) + "</li>")); });
       note.appendChild(ul); out.appendChild(note);
       var ts = resolve(toSel.value);
-      if (ts) out.appendChild(el('<p style="margin-top:10px"><a href="#/build">Plan a build-out at ' + esc(ts.body.name) + " &rarr;</a></p>"));
+      if (ts) {
+        var buildLink = el('<p style="margin-top:10px"><a href="#/build">Plan a build-out at ' + esc(ts.body.name) + " →</a></p>");
+        buildLink.querySelector("a").addEventListener("click", function () {
+          // Phase 3: pre-set Build & Cost destination so it opens on this body.
+          // build.dest uses the same label format as the destSel options:
+          // planets = plain name, moons = "MoonName (Parent)"
+          var destLabel = ts.kind === "moon"
+            ? ts.body.name + " (" + ts.body.parent + ")"
+            : ts.body.name;
+          build.dest = destLabel;
+          saveJSON("se-build", build);
+        });
+        out.appendChild(buildLink);
+      }
       // dated launch windows (calendar dates) — uses BODY_LONGITUDES + LaunchWindows
       var fSpec = resolve(fromSel.value), tSpec = resolve(toSel.value);
       var aF = TripMath.heliocentricAxisAU(fSpec.body, fSpec.kind, planetsByName);
