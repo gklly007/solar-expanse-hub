@@ -9,10 +9,34 @@
 
   // ---- persistent state ----------------------------------------------------
   var owned = loadSet("se-owned");          // research ids the player has completed
-  var build = loadJSON("se-build", { placed: {}, ship: null });
-  var exp = loadJSON("se-exp", { placed: {}, dest: null });
+  // ---- Build & Cost state (merged Build Calculator + Expansion Planner) -----
+  // Canonical store is se-build, extended with an optional `dest`. The old
+  // Expansion Planner store (se-exp) is read defensively and migrated in so a
+  // returning user keeps their list/destination without errors.
+  var build = migrateBuildState();
   var SAVE = loadJSON("se-save", null);     // imported save summary (stockpile/fleet/money)
   var plannerTarget = null;                 // pending planner selection
+
+  function migrateBuildState() {
+    var b = loadJSON("se-build", null);
+    var e = loadJSON("se-exp", null);
+    b = (b && typeof b === "object") ? b : {};
+    e = (e && typeof e === "object") ? e : {};
+    var placed = (b.placed && typeof b.placed === "object") ? b.placed : {};
+    // If the Build Calculator list is empty but the old Expansion list isn't,
+    // adopt the Expansion list so nothing the user planned is lost.
+    if (!Object.keys(placed).length && e.placed && typeof e.placed === "object" && Object.keys(e.placed).length) {
+      placed = e.placed;
+    }
+    var state = {
+      placed: placed,
+      ship: (b.ship != null) ? b.ship : null,
+      // carry a destination from either store (prefer the new one)
+      dest: (b.dest != null) ? b.dest : (e.dest != null ? e.dest : null)
+    };
+    saveJSON("se-build", state);
+    return state;
+  }
 
   function loadSet(key) {
     try { return new Set(JSON.parse(localStorage.getItem(key) || "[]")); }
@@ -179,11 +203,18 @@
   // Router
   // =========================================================================
   var ROUTES = {
-    home: viewHome, planner: viewPlanner, build: viewBuild, expansion: viewExpansion,
+    home: viewHome, planner: viewPlanner, build: viewBuild,
+    // Phase 2: "Build & Cost" (viewBuild) absorbed the old Expansion Planner;
+    // keep #/expansion working by pointing it at the same merged view.
+    expansion: viewBuild,
     trip: viewTrip,
     research: viewResearch, facilities: viewFacilities, spacecraft: viewSpacecraft,
     launchvehicles: viewLaunchVehicles, modules: viewModules, bodies: viewBodies,
-    terraform: viewTerraform, resources: viewResources, economy: viewEconomy,
+    terraform: viewTerraform, resources: viewResources,
+    // Phase 2: Economy retired — its content (per-resource producers/consumers
+    // and facility Power+/Power−) lives on Resources & Facilities. Land #/economy
+    // on Resources so old links still make sense.
+    economy: viewResources,
     progression: viewProgression
   };
 
@@ -194,10 +225,8 @@
       { tab: "home", label: "Home" }
     ] },
     { key: "plan", label: "Plan", items: [
-      { tab: "build", label: "Build Calculator" },
-      { tab: "expansion", label: "Expansion Planner" },
-      { tab: "planner", label: "Research Planner" },
-      { tab: "economy", label: "Economy" }
+      { tab: "build", label: "Build & Cost" },
+      { tab: "planner", label: "Research Planner" }
     ] },
     { key: "travel", label: "Travel", items: [
       { tab: "trip", label: "Trip Planner" },
@@ -216,6 +245,11 @@
       { tab: "progression", label: "Progression" }
     ] }
   ];
+  // Legacy hash aliases that no longer have their own nav item — they render a
+  // merged/relocated view but should highlight (and be remembered as) the
+  // canonical tab so the nav stays consistent.
+  var TAB_ALIAS = { expansion: "build", economy: "resources" };
+  function canonTab(tab) { return TAB_ALIAS[tab] || tab; }
   var TAB_GROUP = {};  // tabKey -> group key
   GROUPS.forEach(function (g) { g.items.forEach(function (it) { TAB_GROUP[it.tab] = g.key; }); });
   function groupByKey(gkey) { for (var i = 0; i < GROUPS.length; i++) if (GROUPS[i].key === gkey) return GROUPS[i]; return null; }
@@ -256,7 +290,8 @@
     return ROUTES[h] ? h : "home";
   }
   function render() {
-    var tab = currentTab();
+    var rawTab = currentTab();
+    var tab = canonTab(rawTab);   // normalize legacy aliases (#/expansion, #/economy)
     var gkey = TAB_GROUP[tab] || "home";
     lastTabInGroup[gkey] = tab; saveJSON("se-nav-last", lastTabInGroup);
     // highlight the active group in the primary bar
@@ -321,8 +356,8 @@
       '<div class="card"><h4>🔬 Research Planner</h4><p>Pick what you want — a tech, a facility, or a ship — and get the exact prerequisite chain, total work-hours, and an ETA from your lab output.</p>' +
       '<a href="#/planner">Open planner →</a></div>'));
     grid.appendChild(el(
-      '<div class="card"><h4>🏗️ Build Calculator</h4><p>Add facilities &amp; modules, apply your completed research discounts automatically, and see total resources, tonnage, ship trips, workers and power.</p>' +
-      '<a href="#/build">Open calculator →</a></div>'));
+      '<div class="card"><h4>🏗️ Build &amp; Cost</h4><p>Add facilities &amp; modules, apply your completed research discounts automatically, and see total resources, tonnage, ship trips, workers and power. Pick a destination and (with a save) what you still need to ship.</p>' +
+      '<a href="#/build">Open Build &amp; Cost →</a></div>'));
     grid.appendChild(el(
       '<div class="card"><h4>🪐 Reference</h4><p>Every facility, spacecraft, module, planet, moon, asteroid and terraforming constant — all sortable and searchable.</p>' +
       '<a href="#/research">Browse research →</a></div>'));
@@ -540,7 +575,11 @@
   }
 
   // =========================================================================
-  // BUILD CALCULATOR (optimizer)
+  // BUILD & COST (optimizer) — merged Build Calculator + Expansion Planner.
+  // Core: pick items, auto-apply research discounts, show resources / tonnage /
+  // ship trips / workers / power. Optionally pick a destination; with a save
+  // imported it additionally shows have / short / missing-research and how many
+  // fleet trips/waves the build-out needs.
   // =========================================================================
   function placeables() {
     var items = [];
@@ -551,8 +590,11 @@
   }
 
   function viewBuild(mount) {
-    pageHeader(mount, "Build Calculator",
-      "Add what you want to build; discounts from research you've ticked apply automatically (additive, exactly like the game).");
+    pageHeader(mount, "Build &amp; Cost",
+      "Add what you want to build; discounts from research you've ticked apply automatically (additive, exactly like the game). " +
+      "Pick an optional destination — with a save imported you also see what you have, what's short, and how many fleet trips it takes.");
+
+    if (!SAVE) mount.appendChild(el('<div class="callout">Tip: click <b>📁 Import save</b> (top-right) — or just <b>drag your save file onto this page</b> — to load your research, stockpile and fleet. Then a destination shows exactly what you still need and how to ship it. Everything works without a save too (it just shows totals).</div>'));
 
     var items = placeables();
     var byId = {}; items.forEach(function (i) { byId[i.id] = i; });
@@ -572,6 +614,14 @@
     var right = el("<div></div>");
     var placedPanel = el('<div class="panel"></div>');
     placedPanel.innerHTML = "<h3>Plan <button class='chip' id='clr' style='float:right'>clear</button></h3>";
+    // optional destination selector (from the old Expansion Planner)
+    var destCtl = el('<div class="controls"><label class="check">Destination:</label></div>');
+    var bodies = DATA.planets.map(function (p) { return p.name; })
+      .concat(DATA.moons.map(function (m) { return m.name + " (" + m.parent + ")"; }));
+    var destSel = el('<select style="min-width:180px"><option value="">— none (totals only) —</option>' +
+      bodies.map(function (b) { return '<option' + (build.dest === b ? " selected" : "") + ">" + esc(b) + "</option>"; }).join("") + "</select>");
+    destCtl.appendChild(destSel);
+    placedPanel.appendChild(destCtl);
     var placedList = el("<div></div>");
     placedPanel.appendChild(placedList);
     right.appendChild(placedPanel);
@@ -609,8 +659,16 @@
     redPanel.appendChild(redGrid);
     mount.appendChild(redPanel);
 
-    function add(id, d) { build.placed[id] = Math.max(0, (build.placed[id] || 0) + d); if (!build.placed[id]) delete build.placed[id]; saveJSON("se-build", build); drawPlaced(); drawTotals(); drawPicker(); }
-    function setCount(id, v) { build.placed[id] = Math.max(0, Math.floor(v || 0)); if (!build.placed[id]) delete build.placed[id]; saveJSON("se-build", build); drawPlaced(); drawTotals(); }
+    // destination-aware results (have / short / missing-research / fleet trips).
+    // Only shown when a destination is chosen; hidden otherwise so a no-destination
+    // user gets exactly the old Build Calculator.
+    var destBox = el('<div class="panel"></div>');
+    destBox.style.display = "none";
+    mount.appendChild(destBox);
+
+    function refresh() { drawPlaced(); drawTotals(); drawDest(); drawPicker(); }
+    function add(id, d) { build.placed[id] = Math.max(0, (build.placed[id] || 0) + d); if (!build.placed[id]) delete build.placed[id]; saveJSON("se-build", build); drawPlaced(); drawTotals(); drawDest(); drawPicker(); }
+    function setCount(id, v) { build.placed[id] = Math.max(0, Math.floor(v || 0)); if (!build.placed[id]) delete build.placed[id]; saveJSON("se-build", build); drawPlaced(); drawTotals(); drawDest(); }
 
     function drawPicker() {
       var q = pf.value.trim().toLowerCase();
@@ -680,38 +738,88 @@
       });
       var resIds = Object.keys(resTotals);
       if (!resIds.length && !Object.keys(build.placed).length) { totalsBox.innerHTML = '<p class="empty">Add items to see totals.</p>'; return; }
+      // have/short columns appear only when a destination is chosen AND a save is loaded
+      var showHave = !!(build.dest && SAVE);
       var html = '<table class="totals">';
-      html += "<tbody>";
+      html += "<thead><tr><th>Resource</th><th class='num'>Need</th>" +
+        (showHave ? "<th class='num'>Have</th><th class='num'>Short</th>" : "") + "</tr></thead><tbody>";
       resIds.sort(function (a, b) { return resName(a).localeCompare(resName(b)); }).forEach(function (rid) {
-        html += "<tr><td>" + resPip(rid, resTotals[rid]) + " " + esc(resName(rid)) + "</td><td class='num'>" + fmtInt(resTotals[rid]) + "</td></tr>";
+        var have = showHave ? Math.round((SAVE.stockpile && SAVE.stockpile[rid]) || 0) : null;
+        var short = have != null ? Math.max(0, resTotals[rid] - have) : null;
+        html += "<tr><td>" + resPip(rid, resTotals[rid]) + " " + esc(resName(rid)) + "</td><td class='num'>" + fmtInt(resTotals[rid]) + "</td>" +
+          (showHave ? "<td class='num muted'>" + fmtInt(have) + "</td><td class='num'" + (short > 0 ? " style='color:var(--bad)'" : " style='color:var(--good)'") + ">" + (short > 0 ? fmtInt(short) : "✓") + "</td>" : "") + "</tr>";
       });
-      html += "<tr class='grand'><td>Total tonnage</td><td class='num'>" + fmtInt(totalTons) + " t</td></tr>";
+      html += "<tr class='grand'><td>Total tonnage</td><td class='num'>" + fmtInt(totalTons) + " t</td>" + (showHave ? "<td colspan='2'></td>" : "") + "</tr>";
       var ship = IDX.spacecraftById[shipSel.value];
       if (ship && ship.cargo_t > 0 && totalTons > 0) {
-        html += "<tr><td>" + esc(ship.name) + " trips <span class='muted'>(" + fmtInt(ship.cargo_t) + " t)</span></td><td class='num'>" + Math.ceil(totalTons / ship.cargo_t).toLocaleString() + "</td></tr>";
+        html += "<tr><td>" + esc(ship.name) + " trips <span class='muted'>(" + fmtInt(ship.cargo_t) + " t)</span></td><td class='num'>" + Math.ceil(totalTons / ship.cargo_t).toLocaleString() + "</td>" + (showHave ? "<td colspan='2'></td>" : "") + "</tr>";
       }
       html += "</tbody><tbody>";
-      if (workers > 0) html += "<tr><td>" + resPip("human", Math.round(workers)) + " Workers needed</td><td class='num'>" + fmtInt(workers) + "</td></tr>";
-      if (Math.round(powerNet) !== 0) html += "<tr><td>Net power " + (powerNet > 0 ? "<span style='color:var(--bad)'>(deficit)</span>" : "<span style='color:var(--good)'>(surplus)</span>") + "</td><td class='num'>" + fmtInt(powerNet) + "</td></tr>";
-      if (days > 0) html += "<tr><td>Build days <span class='muted'>(serial)</span></td><td class='num'>" + fmtInt(days) + "</td></tr>";
+      if (workers > 0) html += "<tr><td>" + resPip("human", Math.round(workers)) + " Workers needed</td><td class='num'>" + fmtInt(workers) + (showHave ? " / " + fmtInt(SAVE.population) + " pop" : "") + "</td>" + (showHave ? "<td colspan='2'></td>" : "") + "</tr>";
+      if (Math.round(powerNet) !== 0) html += "<tr><td>Net power " + (powerNet > 0 ? "<span style='color:var(--bad)'>(deficit)</span>" : "<span style='color:var(--good)'>(surplus)</span>") + "</td><td class='num'>" + fmtInt(powerNet) + "</td>" + (showHave ? "<td colspan='2'></td>" : "") + "</tr>";
+      if (days > 0) html += "<tr><td>Build days <span class='muted'>(serial)</span></td><td class='num'>" + fmtInt(days) + "</td>" + (showHave ? "<td colspan='2'></td>" : "") + "</tr>";
       html += "</tbody></table>";
       totalsBox.innerHTML = html;
     }
 
+    // Destination-aware extras: missing research warning + fleet logistics.
+    // Mirrors the old Expansion Planner's result math exactly.
+    function drawDest() {
+      if (!build.dest) { destBox.style.display = "none"; destBox.innerHTML = ""; return; }
+      destBox.style.display = "";
+      var reds = activeReductions();
+      var tons = 0, workers = 0, missing = [];
+      Object.keys(build.placed).forEach(function (id) {
+        var it = byId[id], c = build.placed[id];
+        if (it.kind === "fac") {
+          var f = it.ref, m = buildCostMult(f, reds);
+          (f.build_cost || []).forEach(function (b) { tons += Math.round(b.amount * m) * c; });
+          workers += (f.workers_required || 0) * crewMult(f, reds) * c;
+          if (f.unlocked_by && f.unlocked_by.length && !f.unlocked_by.some(function (u) { return owned.has(u.id); }))
+            missing.push({ fac: f.name, res: f.unlocked_by });
+        } else { tons += (it.ref.mass || 0) * c; }
+      });
+
+      var html = "<h3>Destination <span class='muted' style='font-weight:400'>→ " + esc(build.dest) + "</span></h3>";
+      if (!Object.keys(build.placed).length) { html += '<p class="empty">Add items above to see what you need to ship to ' + esc(build.dest) + ".</p>"; destBox.innerHTML = html; return; }
+      if (missing.length) {
+        html += '<div class="callout" style="border-color:var(--bad)">⚠ Missing research: ' +
+          missing.map(function (x) { return "<b>" + esc(x.fac) + "</b> needs " + x.res.map(function (u) { return '<a href="#/planner" class="goto-plan" data-id="' + esc(u.id) + '">' + esc(u.name) + "</a>"; }).join(" or "); }).join("; ") + "</div>";
+      }
+      // logistics: trips/waves with your imported fleet, else a reference ship
+      html += "<h4 style='margin:14px 0 6px'>Logistics</h4>";
+      if (SAVE && SAVE.fleet && Object.keys(SAVE.fleet).length) {
+        var fleetCargo = 0, lines = [];
+        Object.keys(SAVE.fleet).forEach(function (sid) {
+          var info = IDX.shipBySaveId[sid]; var cargo = info ? info.cargo : 0; var cnt = SAVE.fleet[sid];
+          fleetCargo += cargo * cnt;
+          lines.push(cnt + "× " + (info ? info.name : sid) + " (" + fmtInt(cargo) + "t)");
+        });
+        var waves = fleetCargo > 0 ? Math.ceil(tons / fleetCargo) : "—";
+        html += "<p>Your fleet: " + esc(lines.join(", ")) + " = <b>" + fmtInt(fleetCargo) + " t</b> per wave → <b>" + waves + "</b> full wave(s) to move " + fmtInt(tons) + " t.</p>";
+      } else {
+        var big = DATA.spacecraft.filter(function (s) { return s.cargo_t; }).sort(function (a, b) { return b.cargo_t - a.cargo_t; })[0];
+        if (big && tons > 0) html += "<p class='muted'>No fleet imported. Reference: a " + esc(big.name) + " carries " + fmtInt(big.cargo_t) + " t → " + Math.ceil(tons / big.cargo_t) + " trips. Import a save to use your real fleet.</p>";
+      }
+      destBox.innerHTML = html;
+      destBox.querySelectorAll(".goto-plan").forEach(function (a) { a.addEventListener("click", function () { plannerTarget = { kind: "research", id: a.getAttribute("data-id") }; }); });
+    }
+
     pf.addEventListener("input", drawPicker);
     shipSel.addEventListener("change", function () { build.ship = shipSel.value; saveJSON("se-build", build); drawTotals(); });
-    placedPanel.querySelector("#clr").addEventListener("click", function () { build.placed = {}; saveJSON("se-build", build); drawPlaced(); drawTotals(); drawPicker(); });
+    destSel.addEventListener("change", function () { build.dest = destSel.value || null; saveJSON("se-build", build); drawTotals(); drawDest(); });
+    placedPanel.querySelector("#clr").addEventListener("click", function () { build.placed = {}; saveJSON("se-build", build); refresh(); });
     redGrid.querySelectorAll(".red-cb").forEach(function (cb) {
       cb.addEventListener("change", function () {
         var id = cb.getAttribute("data-id");
         if (cb.checked) owned.add(id); else owned.delete(id);
         saveSet("se-owned", owned);
-        drawPicker(); drawTotals();
+        drawPicker(); drawTotals(); drawDest();
       });
     });
 
     if (!build.ship && shipSel.options.length) { build.ship = shipSel.value; }
-    drawPicker(); drawPlaced(); drawTotals();
+    drawPicker(); drawPlaced(); drawTotals(); drawDest();
   }
 
   // =========================================================================
@@ -1051,7 +1159,8 @@
   // =========================================================================
   function viewResources(mount) {
     pageHeader(mount, "Resources",
-      "Every resource — market price, Earth export license, and which facilities produce or consume it. Thermal/phase data is on the Terraforming tab.");
+      "Every resource — market price, Earth export license, and which facilities produce or consume it (the supply chain). " +
+      'For colony power balance, the <a href="#/facilities">Facilities</a> tab has Power + / Power − per building. Thermal/phase data is on the Terraforming tab.');
     function money(n) { return n == null ? "—" : "$" + num(n); }
     makeTable(mount, {
       rows: DATA.resources, placeholder: "Filter resources…", search: ["name", "type", "id"], initialSort: "name",
@@ -1275,7 +1384,10 @@
   }
 
   // =========================================================================
-  // ECONOMY — power balance + supply chains (qualitative; no rate data exists)
+  // ECONOMY — RETIRED (Phase 2). No longer in the nav or routed to: #/economy
+  // now lands on Resources (which already lists per-resource producers/consumers)
+  // and Facilities (which already shows Power+/Power−). Kept here, unreferenced,
+  // only so no data/logic is lost; safe to delete in a later cleanup.
   // =========================================================================
   function viewEconomy(mount) {
     pageHeader(mount, "Economy",
@@ -1387,7 +1499,7 @@
       (r.notes || []).forEach(function (n) { ul.appendChild(el("<li>" + esc(n) + "</li>")); });
       note.appendChild(ul); out.appendChild(note);
       var ts = resolve(toSel.value);
-      if (ts) out.appendChild(el('<p style="margin-top:10px"><a href="#/expansion">Plan a build-out at ' + esc(ts.body.name) + " &rarr;</a></p>"));
+      if (ts) out.appendChild(el('<p style="margin-top:10px"><a href="#/build">Plan a build-out at ' + esc(ts.body.name) + " &rarr;</a></p>"));
       // dated launch windows (calendar dates) — uses BODY_LONGITUDES + LaunchWindows
       var fSpec = resolve(fromSel.value), tSpec = resolve(toSel.value);
       var aF = TripMath.heliocentricAxisAU(fSpec.body, fSpec.kind, planetsByName);
@@ -1492,116 +1604,12 @@
   }
 
   // =========================================================================
-  // EXPANSION PLANNER (save-aware): destination + need/have/short + fleet trips
+  // EXPANSION PLANNER — MERGED into Build & Cost (Phase 2) and removed.
+  // #/expansion now routes to viewBuild, which carries every capability the old
+  // planner had: an optional destination selector, save-aware Need/Have/Short
+  // columns, the missing-research warning, and the fleet-trips/waves logistics.
+  // Its old se-exp store is migrated into se-build on boot (see migrateBuildState).
   // =========================================================================
-  function viewExpansion(mount) {
-    pageHeader(mount, "Expansion Planner",
-      "Plan a build-out at a destination. With a save imported, it shows what you already have, what's short, and how many trips your fleet needs.");
-
-    if (!SAVE) mount.appendChild(el('<div class="callout">Click <b>📁 Import save</b> (top-right) — or just <b>drag your save file onto this page</b> — to load your research, stockpile and fleet, then this shows exactly what you still need and how to ship it. You can also plan without a save (it just shows totals).</div>'));
-
-    var items = placeables(); var byId = {}; items.forEach(function (i) { byId[i.id] = i; });
-
-    var panel = el('<div class="panel"></div>');
-    panel.appendChild(el("<h3>Destination &amp; build list</h3>"));
-    var ctr = el('<div class="controls"></div>');
-    var bodies = DATA.planets.map(function (p) { return p.name; })
-      .concat(DATA.moons.map(function (m) { return m.name + " (" + m.parent + ")"; }));
-    var destSel = el('<select style="min-width:200px"><option value="">— destination —</option>' +
-      bodies.map(function (b) { return '<option' + (exp.dest === b ? " selected" : "") + ">" + esc(b) + "</option>"; }).join("") + "</select>");
-    var addSel = el('<select style="min-width:220px"></select>');
-    items.slice().sort(function (a, b) { return a.cat.localeCompare(b.cat) || a.name.localeCompare(b.name); })
-      .forEach(function (it) { addSel.appendChild(el('<option value="' + esc(it.id) + '">' + esc(it.name) + " — " + esc(it.cat) + "</option>")); });
-    var addBtn = el('<button class="btn">+ Add</button>');
-    ctr.appendChild(el('<label class="check">To:</label>')); ctr.appendChild(destSel);
-    ctr.appendChild(addSel); ctr.appendChild(addBtn);
-    panel.appendChild(ctr);
-    var placedBox = el("<div></div>"); panel.appendChild(placedBox);
-    mount.appendChild(panel);
-    var resBox = el('<div class="panel"></div>'); mount.appendChild(resBox);
-
-    function add(id, d) { exp.placed[id] = Math.max(0, (exp.placed[id] || 0) + d); if (!exp.placed[id]) delete exp.placed[id]; saveJSON("se-exp", exp); drawPlaced(); drawResults(); }
-
-    function drawPlaced() {
-      var ids = Object.keys(exp.placed);
-      if (!ids.length) { placedBox.innerHTML = '<p class="empty">Add facilities/modules to build at the destination.</p>'; return; }
-      placedBox.innerHTML = "";
-      ids.sort(function (a, b) { return byId[a].name.localeCompare(byId[b].name); }).forEach(function (id) {
-        var row = el('<div class="placed-row"><span class="pname">' + esc(byId[id].name) + "</span></div>");
-        var counter = el('<span class="counter"></span>');
-        var dec = el("<button>−</button>"), inc = el("<button>+</button>"), inp = el('<input type="number" min="0" value="' + exp.placed[id] + '">');
-        dec.addEventListener("click", function () { add(id, -1); });
-        inc.addEventListener("click", function () { add(id, 1); });
-        inp.addEventListener("change", function () { exp.placed[id] = Math.max(0, parseInt(inp.value, 10) || 0); if (!exp.placed[id]) delete exp.placed[id]; saveJSON("se-exp", exp); drawPlaced(); drawResults(); });
-        counter.appendChild(dec); counter.appendChild(inp); counter.appendChild(inc);
-        row.appendChild(counter);
-        var rm = el('<button class="chip">✕</button>'); rm.addEventListener("click", function () { delete exp.placed[id]; saveJSON("se-exp", exp); drawPlaced(); drawResults(); });
-        row.appendChild(rm); placedBox.appendChild(row);
-      });
-    }
-
-    function drawResults() {
-      var ids = Object.keys(exp.placed);
-      if (!ids.length) { resBox.innerHTML = "<h3>Requirements</h3><p class='empty'>Nothing planned yet.</p>"; return; }
-      var reds = activeReductions();
-      var need = {}, tons = 0, workers = 0, power = 0, days = 0, missing = [];
-      ids.forEach(function (id) {
-        var it = byId[id], c = exp.placed[id];
-        if (it.kind === "fac") {
-          var f = it.ref, m = buildCostMult(f, reds);
-          (f.build_cost || []).forEach(function (b) { var a = Math.round(b.amount * m) * c; need[b.resource] = (need[b.resource] || 0) + a; tons += a; });
-          workers += (f.workers_required || 0) * crewMult(f, reds) * c;
-          power += ((f.energy_consumption || 0) - (f.power_production || 0) * powerMult(f, reds)) * c;
-          days += (f.build_time_days || 0) * c;
-          if (f.unlocked_by && f.unlocked_by.length && !f.unlocked_by.some(function (u) { return owned.has(u.id); }))
-            missing.push({ fac: f.name, res: f.unlocked_by });
-        } else { tons += (it.ref.mass || 0) * c; }
-      });
-
-      var html = "<h3>Requirements" + (exp.dest ? ' <span class="muted" style="font-weight:400">→ ' + esc(exp.dest) + "</span>" : "") + "</h3>";
-      if (missing.length) {
-        html += '<div class="callout" style="border-color:var(--bad)">⚠ Missing research: ' +
-          missing.map(function (x) { return "<b>" + esc(x.fac) + "</b> needs " + x.res.map(function (u) { return '<a href="#/planner" class="goto-plan" data-id="' + esc(u.id) + '">' + esc(u.name) + "</a>"; }).join(" or "); }).join("; ") + "</div>";
-      }
-      html += '<table class="totals"><thead><tr><th>Resource</th><th class="num">Need</th>' +
-        (SAVE ? '<th class="num">Have</th><th class="num">Short</th>' : "") + "</tr></thead><tbody>";
-      Object.keys(need).sort(function (a, b) { return resName(a).localeCompare(resName(b)); }).forEach(function (rid) {
-        var have = SAVE ? Math.round(SAVE.stockpile[rid] || 0) : null;
-        var short = have != null ? Math.max(0, need[rid] - have) : null;
-        html += "<tr><td>" + resPip(rid, need[rid]) + " " + esc(resName(rid)) + "</td><td class='num'>" + fmtInt(need[rid]) + "</td>" +
-          (SAVE ? "<td class='num muted'>" + fmtInt(have) + "</td><td class='num'" + (short > 0 ? " style='color:var(--bad)'" : " style='color:var(--good)'") + ">" + (short > 0 ? fmtInt(short) : "✓") + "</td>" : "") + "</tr>";
-      });
-      html += "<tr class='grand'><td>Total tonnage</td><td class='num'>" + fmtInt(tons) + " t</td>" + (SAVE ? "<td colspan='2'></td>" : "") + "</tbody></table>";
-      resBox.innerHTML = html;
-
-      // logistics: trips with your fleet
-      var log = "<h4 style='margin:14px 0 6px'>Logistics</h4>";
-      if (SAVE && Object.keys(SAVE.fleet).length) {
-        var fleetCargo = 0, lines = [];
-        Object.keys(SAVE.fleet).forEach(function (sid) {
-          var info = IDX.shipBySaveId[sid]; var cargo = info ? info.cargo : 0; var cnt = SAVE.fleet[sid];
-          fleetCargo += cargo * cnt;
-          lines.push(cnt + "× " + (info ? info.name : sid) + " (" + fmtInt(cargo) + "t)");
-        });
-        var waves = fleetCargo > 0 ? Math.ceil(tons / fleetCargo) : "—";
-        log += "<p>Your fleet: " + esc(lines.join(", ")) + " = <b>" + fmtInt(fleetCargo) + " t</b> per wave → <b>" + waves + "</b> full wave(s) to move " + fmtInt(tons) + " t.</p>";
-      } else {
-        var big = DATA.spacecraft.filter(function (s) { return s.cargo_t; }).sort(function (a, b) { return b.cargo_t - a.cargo_t; })[0];
-        if (big) log += "<p class='muted'>No fleet imported. Reference: a " + esc(big.name) + " carries " + fmtInt(big.cargo_t) + " t → " + Math.ceil(tons / big.cargo_t) + " trips.</p>";
-      }
-      log += "<table class='totals'><tbody>";
-      if (workers > 0) log += "<tr><td>" + resPip("human", Math.round(workers)) + " Workers needed</td><td class='num'>" + fmtInt(workers) + (SAVE ? " / " + fmtInt(SAVE.population) + " pop" : "") + "</td></tr>";
-      if (Math.round(power) !== 0) log += "<tr><td>Net power</td><td class='num'>" + fmtInt(power) + "</td></tr>";
-      if (days > 0) log += "<tr><td>Build days (serial)</td><td class='num'>" + fmtInt(days) + "</td></tr>";
-      log += "</tbody></table>";
-      resBox.innerHTML += log;
-      resBox.querySelectorAll(".goto-plan").forEach(function (a) { a.addEventListener("click", function () { plannerTarget = { kind: "research", id: a.getAttribute("data-id") }; }); });
-    }
-
-    addBtn.addEventListener("click", function () { if (addSel.value) add(addSel.value, 1); });
-    destSel.addEventListener("change", function () { exp.dest = destSel.value; saveJSON("se-exp", exp); drawResults(); });
-    drawPlaced(); drawResults();
-  }
 
   // ---- utils ---------------------------------------------------------------
   function uniq(a) { return Array.from(new Set(a)); }
@@ -1773,8 +1781,8 @@
     var cargo = fleetCargoTotal();
     if (cargo.total > 0) {
       out.push({ icon: "🚀", title: "Your fleet carries " + fmtInt(cargo.total) + " t per trip",
-        body: cargo.lines.map(esc).join(" · ") + "<br><span class='muted'>Open the Expansion Planner to see how many trips a build-out needs.</span>",
-        action: { href: "#/expansion", label: "Plan an expansion" } });
+        body: cargo.lines.map(esc).join(" · ") + "<br><span class='muted'>Open Build &amp; Cost, pick a destination, and see how many trips a build-out needs.</span>",
+        action: { href: "#/build", label: "Plan a build-out" } });
     }
     var lockedFacs = DATA.facilities.filter(function (f) {
       return f.unlocked_by && f.unlocked_by.length && !f.unlocked_by.some(function (u) { return owned.has(u.id); });
@@ -1791,7 +1799,7 @@
     if (SAVE.money > 1e6) {
       out.push({ icon: "💰", title: "Treasury looks healthy",
         body: "$" + fmtInt(SAVE.money) + " banked — consider committing it to a build-out or the next launch-vehicle tier.",
-        action: { href: "#/build", label: "Open Build Calculator" } });
+        action: { href: "#/build", label: "Open Build &amp; Cost" } });
     }
     return out.slice(0, 4);
   }
